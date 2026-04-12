@@ -42,9 +42,11 @@ from celegans_live_demo.worm_snapshot import (
 # --- Compact WebSocket JSON protocol v2 (short keys) ---
 # p  = protocol version (int)
 # t  = message type: "h" hello, "s" state, "e" error, "o" pong, "u" presence (server→client)
+#      Food events (separate JSON frames after "s", same p): "fa" add, "fr" remove, "fe" eaten
+#      n = pellet count since last broadcast (aggregated across sim ticks in that window)
 #      client→server: "a" add_food, "v" remove_food, "i" ping
 # Presence (t=="u"): n = concurrent WebSocket client count
-# State payload (t=="s"):
+# State payload (t=="s") — simulation only (no food action attribution):
 # k  = tick (simulation step)
 # r  = plate_radius_mm
 # w  = worm_radius_mm
@@ -52,6 +54,7 @@ from celegans_live_demo.worm_snapshot import (
 # f  = food_mm — list of [x,y] in mm
 # c  = com_mm — centre of mass [x,y] in mm (client builds trajectory locally)
 # S  = membrane (PAULA S) per paula_id, 4 decimal places; F = 0/1 fired (O>0)
+# R  = dynamic primary threshold r (same units as S), 4 decimals — for per-neuron UI scaling
 # Hello optional L = {nm, ax, ay} static layout (Cook order AP + name D/V proxy)
 # Hello optional M = parallel list to nm: {k,ic,ig,oc,og} Cook connectome metadata
 #   k = neuron class: s sensory, m motor, i interneuron, u unknown
@@ -189,7 +192,7 @@ def _quantize_snapshot_for_wire(snap: dict[str, Any]) -> dict[str, Any]:
     """Like :func:`_quantize_wire_payload` but ``S`` stays 4-decimal; ``s`` uses segment sigfigs."""
     out: dict[str, Any] = {}
     for k, v in snap.items():
-        if k == "S":
+        if k == "S" or k == "R":
             out[k] = v
         elif k == "s":
             out[k] = _quantize_wire_payload(v, float_sig_digits=WIRE_SEGMENT_SIG_DIGITS)
@@ -245,6 +248,14 @@ class SimRuntime:
             ax, ay = side_view_layout_normalized(names)
             self._neural_static = {"nm": names, "ax": ax, "ay": ay}
             self._neuron_meta = _wire_neuron_meta_list(ns0)
+        # Counts reset each sim tick in run_loop before draining the command queue.
+        self._food_cmd_add = 0
+        self._food_cmd_remove = 0
+        # Aggregated for take_latest_for_broadcast (sim may outpace BROADCAST_HZ).
+        self._food_evt_accum_fr = 0
+        self._food_evt_accum_fe = 0
+        self._food_evt_accum_fa = 0
+        self._n_pre_food_for_tick = 0
 
     def command_queue(self) -> queue.SimpleQueue[dict[str, Any]]:
         return self._cmd_queue
@@ -268,6 +279,7 @@ class SimRuntime:
                 pos_m = np.array([x_mm / 1000.0, y_mm / 1000.0, 0.0])
                 if env.is_on_plate(pos_m):
                     env.add_food((float(pos_m[0]), float(pos_m[1]), float(pos_m[2])))
+                    self._food_cmd_add += 1
                     logger.info(
                         "Food added at ({:.3f}, {:.3f}) mm ({} pellets)",
                         x_mm,
@@ -283,7 +295,8 @@ class SimRuntime:
             elif ctype == "remove_food":
                 x_mm = float(cmd["x_mm"])
                 y_mm = float(cmd["y_mm"])
-                env.remove_food_near((x_mm / 1000.0, y_mm / 1000.0, 0.0))
+                if env.remove_food_near((x_mm / 1000.0, y_mm / 1000.0, 0.0)):
+                    self._food_cmd_remove += 1
                 logger.info(
                     "Food remove near ({:.3f}, {:.3f}) mm ({} pellets)",
                     x_mm,
@@ -292,6 +305,12 @@ class SimRuntime:
                 )
 
     def _build_snapshot(self) -> dict[str, Any]:
+        env0 = self.engine.environment
+        n_pre_food = 0
+        if isinstance(env0, AgarPlateEnvironment):
+            n_pre_food = len(env0.get_active_food_positions())
+        self._n_pre_food_for_tick = n_pre_food
+
         step = self.engine.step()
         body = self.engine.body
         bs = step.body_state
@@ -327,18 +346,34 @@ class SimRuntime:
         }
         ns = self.engine.nervous_system
         if isinstance(ns, CElegansNervousSystem):
-            s_raw, f_raw = ns.get_compact_neural_snapshot()
+            s_raw, f_raw, r_raw = ns.get_compact_neural_snapshot()
             out["S"] = [round(float(x), 4) for x in s_raw]
             out["F"] = [int(x) for x in f_raw]
+            out["R"] = [round(float(x), 4) for x in r_raw]
         return out
+
+    def _food_evt_triplet_this_tick(self) -> tuple[int, int, int]:
+        """(manual_removes, eaten, manual_adds) for this sim tick on agar; else zeros."""
+        env = self.engine.environment
+        if not isinstance(env, AgarPlateEnvironment):
+            return (0, 0, 0)
+        n_post = len(env.get_active_food_positions())
+        eaten = max(0, int(self._n_pre_food_for_tick) - n_post)
+        return (int(self._food_cmd_remove), eaten, int(self._food_cmd_add))
 
     def run_loop(self) -> None:
         try:
             while self._running.is_set():
+                self._food_cmd_add = 0
+                self._food_cmd_remove = 0
                 self._drain_commands()
                 snap = self._build_snapshot()
+                fr, fe, fa = self._food_evt_triplet_this_tick()
                 with self._snapshot_lock:
                     self._latest = snap
+                    self._food_evt_accum_fr += fr
+                    self._food_evt_accum_fe += fe
+                    self._food_evt_accum_fa += fa
                 if self._snapshot_path is not None:
                     now = time.monotonic()
                     if now - self._last_disk_save >= self._snapshot_interval_s:
@@ -361,6 +396,32 @@ class SimRuntime:
     def get_snapshot(self) -> dict[str, Any]:
         with self._snapshot_lock:
             return dict(self._latest)
+
+    def take_latest_for_broadcast(
+        self,
+    ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+        """Atomically copy latest state and drain aggregated food events (fa/fr/fe)."""
+        with self._snapshot_lock:
+            if not self._latest:
+                return None, []
+            snap = dict(self._latest)
+            events: list[dict[str, Any]] = []
+            if self._food_evt_accum_fr:
+                events.append(
+                    {"p": PROTOCOL_VERSION, "t": "fr", "n": int(self._food_evt_accum_fr)}
+                )
+                self._food_evt_accum_fr = 0
+            if self._food_evt_accum_fe:
+                events.append(
+                    {"p": PROTOCOL_VERSION, "t": "fe", "n": int(self._food_evt_accum_fe)}
+                )
+                self._food_evt_accum_fe = 0
+            if self._food_evt_accum_fa:
+                events.append(
+                    {"p": PROTOCOL_VERSION, "t": "fa", "n": int(self._food_evt_accum_fa)}
+                )
+                self._food_evt_accum_fa = 0
+            return snap, events
 
     def has_snapshot(self) -> bool:
         with self._snapshot_lock:
@@ -537,7 +598,7 @@ def main() -> None:
             hello: dict[str, Any] = {
                 "p": PROTOCOL_VERSION,
                 "t": "h",
-                "m": "t=a|v|i  x,y mm  (add food, remove food, ping); S,F on each state",
+                "m": "t=a|v|i client x,y mm; t=s state; fa|fr|fe food events (n=count)",
             }
             if rt._neural_static is not None:
                 hello["L"] = rt._neural_static
@@ -643,12 +704,15 @@ def main() -> None:
             # If we fell behind (slow sends / load), advance the schedule without emitting backlog.
             while next_wake < time.monotonic():
                 next_wake += interval
-            snap = rt.get_snapshot()
+            snap, food_events = rt.take_latest_for_broadcast()
             if not snap:
                 continue
             payload = json.dumps(
                 _quantize_snapshot_for_wire(snap), separators=(",", ":")
             )
+            food_payloads = [
+                json.dumps(ev, separators=(",", ":")) for ev in food_events
+            ]
             async with clients_lock:
                 snapshot_clients = list(clients)
             dead: list[ServerConnection] = []
@@ -658,6 +722,11 @@ def main() -> None:
                         c.send(payload),
                         timeout=broadcast_send_timeout_s,
                     )
+                    for fp in food_payloads:
+                        await asyncio.wait_for(
+                            c.send(fp),
+                            timeout=broadcast_send_timeout_s,
+                        )
                 except TimeoutError:
                     logger.debug(
                         "Broadcast send skipped (timeout {:.0f} ms) for {}",

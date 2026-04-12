@@ -1,7 +1,9 @@
 /**
  * C. elegans live viewer — WebSocket + canvas (pan/zoom, worm spine + parts).
  * Protocol v2: short JSON keys (see README). Trajectory from `c`; hello `L` (layout);
- * each state may include `S` (V_m, 4 decimals) and `F` (fired 0/1).
+ * each state may include `S` (V_m, 4 decimals), `F` (fired 0/1), and `R` (threshold r, 4 decimals).
+ * Food UX: separate frames `fa` / `fr` / `fe` with `n` = count (viewer commands vs worm eaten).
+ * Presence `t:"u"` with `n` = concurrent viewer count; client toasts join/leave from deltas.
  * Hello `M` = connectome metadata per neuron (parallel to `L.nm`).
  *
  * Rendering: CSS-pixel space + DPR bitmap; world→view via one canvas transform;
@@ -38,6 +40,9 @@
   const onlineEl = document.getElementById("online");
   const tickEl = document.getElementById("tick");
   const fpsEl = document.getElementById("fps");
+
+  /** Last `t:"u"` count; `-1` until first presence after connect (no join spam on first packet). */
+  let lastPresenceN = -1;
 
   /** @type {object | null} latest server snapshot (authoritative tick / trail source) */
   let targetState = null;
@@ -86,6 +91,8 @@
   let lastNeuralS = [];
   /** @type {number[]} latest F 0/1 */
   let lastNeuralF = [];
+  /** @type {number[]} latest dynamic firing threshold r (PAULA units), parallel to S */
+  let lastNeuralR = [];
 
   let hoverNeuronIdx = -1;
   /** Last pointer over neural canvas (viewport px); tooltip anchor while mouse is still. */
@@ -93,8 +100,19 @@
   let neuralHoverClientY = 0;
   /** Layout from last drawNeural; used for hover hit-test (CSS px). */
   let lastNeuralLayout = null;
-  /** Set on worm canvas: `'v'` after remove click, cleared next state tick. */
-  let pendingFoodCmd = null;
+  const LS_ALERTS = "celegans_live_alerts_v1";
+  let alertsWanted = false;
+  try {
+    alertsWanted = localStorage.getItem(LS_ALERTS) === "1";
+  } catch (_) {}
+
+  function alertsActive() {
+    return (
+      alertsWanted &&
+      typeof Notification !== "undefined" &&
+      Notification.permission === "granted"
+    );
+  }
 
   const neuralTooltipEl = document.getElementById("neural-tooltip");
   const neuronModalEl = document.getElementById("neuron-modal");
@@ -110,15 +128,28 @@
     "https://www.wormbook.org/chapters/www_celegansVolII/neurobiology.html";
   const WORMWIRING_COOK_URL = "https://wormwiring.org/pages/emmonslab.html";
 
-  function wormBaseSearchUrl(name) {
-    return "https://wormbase.org/search/site/" + encodeURIComponent(name);
+  /** WormBase SPA simple search (legacy `/search/site/` often shows no hits). */
+  function wormBaseSimpleSearchUrl(name) {
+    return (
+      "https://www.wormbase.org/#/species/c_elegans/searches/simple?query=" +
+      encodeURIComponent(name)
+    );
   }
 
-  function pubmedNeuronLiteratureUrl(name) {
+  /** Alliance aggregates WormBase + other sources; reliable hits for neuron names in expression. */
+  function allianceCelegansSearchUrl(name) {
     return (
-      "https://pubmed.ncbi.nlm.nih.gov/?term=" +
-      encodeURIComponent("Caenorhabditis elegans AND " + name)
+      "https://www.alliancegenome.org/search?q=" +
+      encodeURIComponent(name) +
+      "&species=" +
+      encodeURIComponent("Caenorhabditis elegans")
     );
+  }
+
+  /** Space-separated terms use PubMed’s default AND; boolean `AND` in ?term= is flaky in some clients. */
+  function pubmedNeuronLiteratureUrl(name) {
+    const term = "c elegans " + name + " neuron";
+    return "https://pubmed.ncbi.nlm.nih.gov/?term=" + encodeURIComponent(term);
   }
 
   function appendLinkItem(ul, href, label) {
@@ -187,6 +218,9 @@
     if (idx < lastNeuralS.length) {
       addRow("V_m (this tick)", String(lastNeuralS[idx]));
     }
+    if (idx < lastNeuralR.length) {
+      addRow("Threshold r (this tick)", String(lastNeuralR[idx]));
+    }
     if (idx < lastNeuralF.length) {
       addRow("Fired (O>0)", lastNeuralF[idx] ? "Yes" : "No");
     }
@@ -205,12 +239,19 @@
     appendLinkItem(
       ul,
       pubmedNeuronLiteratureUrl(name),
-      "PubMed — search: Caenorhabditis elegans + " + name
+      "PubMed — keyword search: c elegans + " + name + " + neuron"
     );
     appendLinkItem(
       ul,
-      wormBaseSearchUrl(name),
-      "WormBase — site search for " + name
+      allianceCelegansSearchUrl(name),
+      "Alliance Genome — C. elegans search (genes / expression mentioning " +
+        name +
+        ")"
+    );
+    appendLinkItem(
+      ul,
+      wormBaseSimpleSearchUrl(name),
+      "WormBase — simple search (same data; opens in SPA)"
     );
     appendLinkItem(
       ul,
@@ -473,7 +514,105 @@
     return "rgb(" + r + "," + g + "," + b + ")";
   }
 
-  function showToast(message) {
+  function syncAlertsToggleLabel() {
+    const btn = document.getElementById("alerts-toggle");
+    if (!btn) return;
+    const perm =
+      typeof Notification !== "undefined" ? Notification.permission : "denied";
+    if (alertsActive()) {
+      btn.textContent = "Alerts: on";
+      btn.classList.add("on");
+      btn.title =
+        "Toasts also go to system notifications + chime for food and viewer join/leave";
+    } else if (alertsWanted && perm === "default") {
+      btn.textContent = "Alerts: pending";
+      btn.classList.remove("on");
+      btn.title = "Click again and allow notifications in the browser prompt";
+    } else {
+      btn.textContent = "Alerts: off";
+      btn.classList.remove("on");
+      btn.title =
+        "Enable browser notifications + sound for food and viewer join/leave (requires permission)";
+    }
+  }
+
+  /** Short chime when desktop alerts are active (Notification uses silent:true to avoid double ding). */
+  function playToastSound(opts) {
+    if (!alertsActive()) return;
+    opts = opts || {};
+    const freq = opts.freq != null ? opts.freq : 560;
+    const dur = opts.dur != null ? opts.dur : 0.075;
+    const gain = opts.gain != null ? opts.gain : 0.065;
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      const ctx = new Ctx();
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = "sine";
+      o.frequency.value = freq;
+      g.gain.value = gain;
+      o.connect(g);
+      g.connect(ctx.destination);
+      o.start();
+      o.stop(ctx.currentTime + dur);
+      ctx.resume().catch(function () {});
+    } catch (_) {}
+  }
+
+  function notifyDesktop(title, body) {
+    if (!alertsActive()) return;
+    try {
+      new Notification(title, {
+        body: body || title,
+        silent: true,
+      });
+    } catch (_) {}
+  }
+
+  /**
+   * @param {string} message
+   * @param {{ title?: string, os?: boolean }} [opts]
+   */
+  /** Update bar label and show join/leave toasts when `n` changes (skips first packet after connect). */
+  function applyPresenceCount(n) {
+    if (onlineEl) {
+      onlineEl.textContent = (n === 1 ? "1 viewer" : n + " viewers") + " online";
+    }
+    if (lastPresenceN < 0) {
+      lastPresenceN = n;
+      return;
+    }
+    if (n > lastPresenceN) {
+      const d = n - lastPresenceN;
+      showToast(d === 1 ? "A viewer joined" : d + " viewers joined", {
+        title: "Viewers",
+      });
+    } else if (n < lastPresenceN) {
+      const d = lastPresenceN - n;
+      showToast(d === 1 ? "A viewer left" : d + " viewers left", {
+        title: "Viewers",
+      });
+    }
+    lastPresenceN = n;
+  }
+
+  /** Server food events (`fa` add / `fr` viewer remove / `fe` worm eaten), separate from `t:"s"`. */
+  function showFoodEventToasts(msg) {
+    const n = Number(msg.n);
+    if (!Number.isFinite(n) || n < 1) return;
+    if (msg.t === "fr") {
+      showToast(n === 1 ? "Pellet removed" : n + " pellets removed", { title: "Food" });
+    } else if (msg.t === "fe") {
+      showToast(n === 1 ? "Food eaten!" : n + " pellets eaten!", { title: "Food" });
+    } else if (msg.t === "fa") {
+      showToast(n === 1 ? "Pellet placed" : n + " pellets placed", { title: "Food" });
+    }
+  }
+
+  function showToast(message, opts) {
+    opts = opts || {};
+    const title = opts.title != null ? opts.title : "C. elegans live";
     const stack = document.getElementById("toast-stack");
     if (!stack) return;
     const el = document.createElement("div");
@@ -487,6 +626,10 @@
     }, 3400);
     while (stack.children.length > 5) {
       stack.removeChild(stack.firstChild);
+    }
+    if (opts.os !== false) {
+      playToastSound();
+      notifyDesktop(title, message);
     }
   }
 
@@ -527,13 +670,38 @@
     if (idx < lastNeuralS.length) {
       line += " · V_m=" + lastNeuralS[idx];
     }
+    if (idx < lastNeuralR.length) {
+      line += " · r=" + lastNeuralR[idx];
+    }
     if (idx < lastNeuralF.length && lastNeuralF[idx]) {
       line += " · fired";
     }
     neuralTooltipEl.textContent = line;
     neuralTooltipEl.style.display = "block";
-    neuralTooltipEl.style.left = neuralHoverClientX + 12 + "px";
-    neuralTooltipEl.style.top = neuralHoverClientY + 12 + "px";
+
+    const pad = 8;
+    const gap = 12;
+    let left = neuralHoverClientX + gap;
+    let top = neuralHoverClientY + gap;
+    neuralTooltipEl.style.left = left + "px";
+    neuralTooltipEl.style.top = top + "px";
+
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const r = neuralTooltipEl.getBoundingClientRect();
+
+    if (r.right > vw - pad) {
+      left = neuralHoverClientX - r.width - gap;
+    }
+    if (r.bottom > vh - pad) {
+      top = neuralHoverClientY - r.height - gap;
+    }
+
+    left = Math.max(pad, Math.min(left, vw - r.width - pad));
+    top = Math.max(pad, Math.min(top, vh - r.height - pad));
+
+    neuralTooltipEl.style.left = left + "px";
+    neuralTooltipEl.style.top = top + "px";
   }
 
   function drawNeural() {
@@ -569,17 +737,20 @@
       aySpan,
     };
 
+    const ns = lastNeuralS.length;
+    const nr = lastNeuralR.length;
+    const usePerNeuronR = nr === ns && ns > 0;
+
     let smin = Infinity;
     let smax = -Infinity;
-    const ns = lastNeuralS.length;
     for (let i = 0; i < ns; i++) {
       const v = lastNeuralS[i];
       if (v < smin) smin = v;
       if (v > smax) smax = v;
     }
     if (!(smax > smin)) {
-      smin = -70;
-      smax = 20;
+      smin = 0;
+      smax = 1;
     }
 
     for (let i = 0; i < n; i++) {
@@ -587,7 +758,13 @@
       const y = marginTop + ((NEURAL_AY_HI - layoutAy[i]) / aySpan) * ph;
       let t = 0.5;
       if (i < ns) {
-        t = (lastNeuralS[i] - smin) / (smax - smin);
+        if (usePerNeuronR) {
+          const ri = lastNeuralR[i];
+          const denom = Math.max(ri, 1e-6);
+          t = Math.max(0, Math.min(1, lastNeuralS[i] / denom));
+        } else {
+          t = (lastNeuralS[i] - smin) / (smax - smin);
+        }
       }
       ctxN.beginPath();
       ctxN.arc(x, y, rad, 0, Math.PI * 2);
@@ -611,7 +788,9 @@
     ctxN.font = "11px system-ui";
     const legendY = neuralCssH - 8;
     ctxN.fillText(
-      "Cook A→P (x) · D↑ V↓ (y) · fill=V_m · ring=fired",
+      usePerNeuronR
+        ? "Cook A→P (x) · D↑ V↓ (y) · fill=V_m / r · ring=fired"
+        : "Cook A→P (x) · D↑ V↓ (y) · fill=V_m (global) · ring=fired",
       marginLR,
       legendY
     );
@@ -626,12 +805,6 @@
       segments_mm: msg.s,
       food_mm: msg.f,
     };
-
-    const prevFoodN =
-      targetState && Array.isArray(targetState.food_mm)
-        ? targetState.food_mm.length
-        : -1;
-    const newFoodN = Array.isArray(incoming.food_mm) ? incoming.food_mm.length : 0;
 
     let dtSinceLast = 0;
     if (lastMsgAtMs > 0) {
@@ -677,18 +850,10 @@
     if (Array.isArray(msg.F)) {
       lastNeuralF = msg.F.map((v) => (Number(v) ? 1 : 0));
     }
+    if (Array.isArray(msg.R)) {
+      lastNeuralR = msg.R.map(Number);
+    }
 
-    if (prevFoodN >= 0 && newFoodN < prevFoodN) {
-      const d = prevFoodN - newFoodN;
-      if (pendingFoodCmd === "v") {
-        showToast(d === 1 ? "Pellet removed" : d + " pellets removed");
-      } else {
-        showToast(d === 1 ? "Food eaten!" : d + " pellets eaten!");
-      }
-    }
-    if (pendingFoodCmd === "v") {
-      pendingFoodCmd = null;
-    }
   }
 
   function connect() {
@@ -712,7 +877,9 @@
       neuronMeta = null;
       lastNeuralS = [];
       lastNeuralF = [];
-      pendingFoodCmd = null;
+      lastNeuralR = [];
+      lastPresenceN = -1;
+      syncAlertsToggleLabel();
     };
     ws.onclose = () => {
       statusEl.textContent = "Disconnected (retry in 3s)";
@@ -737,9 +904,10 @@
           neuronMeta = Array.isArray(msg.M) ? msg.M : null;
         } else if (msg.t === "s") {
           applyStateMsg(msg);
-        } else if (msg.t === "u" && typeof msg.n === "number" && onlineEl) {
-          const n = msg.n;
-          onlineEl.textContent = (n === 1 ? "1 viewer" : n + " viewers") + " online";
+        } else if (msg.t === "fa" || msg.t === "fr" || msg.t === "fe") {
+          showFoodEventToasts(msg);
+        } else if (msg.t === "u" && typeof msg.n === "number") {
+          applyPresenceCount(msg.n);
         }
       } catch (_) {
         /* ignore */
@@ -775,7 +943,6 @@
     if (e.button === 0) {
       window._ws.send(JSON.stringify({ ...base, t: "a" }));
     } else if (e.button === 2) {
-      pendingFoodCmd = "v";
       window._ws.send(JSON.stringify({ ...base, t: "v" }));
     }
   });
@@ -854,6 +1021,57 @@
       }
     });
   }
+
+  const alertsBtn = document.getElementById("alerts-toggle");
+  if (alertsBtn) {
+    alertsBtn.addEventListener("click", () => {
+      if (typeof Notification === "undefined") {
+        showToast("Notifications not supported in this browser", {
+          os: false,
+          title: "Alerts",
+        });
+        return;
+      }
+      if (alertsActive()) {
+        alertsWanted = false;
+        try {
+          localStorage.setItem(LS_ALERTS, "0");
+        } catch (_) {}
+        syncAlertsToggleLabel();
+        showToast("Desktop alerts off (in-page toasts only)", { os: false });
+        return;
+      }
+      if (Notification.permission === "denied") {
+        showToast("Notifications blocked — allow this site in browser settings", {
+          os: false,
+          title: "Alerts",
+        });
+        return;
+      }
+      Notification.requestPermission().then((p) => {
+        if (p === "granted") {
+          alertsWanted = true;
+          try {
+            localStorage.setItem(LS_ALERTS, "1");
+          } catch (_) {}
+        } else {
+          alertsWanted = false;
+          try {
+            localStorage.setItem(LS_ALERTS, "0");
+          } catch (_) {}
+        }
+        syncAlertsToggleLabel();
+        if (p === "granted") {
+          showToast("Desktop alerts on — tray notifications + sound for food and viewer join/leave", {
+            title: "C. elegans live",
+          });
+        } else {
+          showToast("Notification permission not granted", { os: false });
+        }
+      });
+    });
+  }
+  syncAlertsToggleLabel();
 
   resize();
   connect();

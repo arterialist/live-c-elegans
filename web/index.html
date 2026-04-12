@@ -28,6 +28,25 @@
       #bar span.err {
         color: #e88;
       }
+      #alerts-toggle {
+        margin-left: auto;
+        flex-shrink: 0;
+        font: inherit;
+        font-size: 12px;
+        padding: 4px 10px;
+        border-radius: 6px;
+        border: 1px solid #4a5568;
+        background: #2a3040;
+        color: #e8eaef;
+        cursor: pointer;
+      }
+      #alerts-toggle:hover {
+        background: #343b4d;
+      }
+      #alerts-toggle.on {
+        border-color: #5a8f6a;
+        color: #9dcaae;
+      }
       #main-split {
         height: calc(100% - 42px);
         display: flex;
@@ -220,6 +239,9 @@
         >Left: add food · Right: remove · <kbd>Shift</kbd>+drag: pan · Wheel:
         zoom · bottom: 302 PAULA cells — hover name, click for details</span
       >
+      <button type="button" id="alerts-toggle" title="Browser notifications + sound for food and viewer join/leave (after permission)">
+        Alerts: off
+      </button>
     </div>
     <div id="main-split">
       <div id="worm-panel">
