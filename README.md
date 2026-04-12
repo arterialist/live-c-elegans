@@ -64,15 +64,19 @@ Wire format uses short keys and **no server-side trajectory** (the client append
 | Key | Meaning |
 |-----|---------|
 | `p` | protocol version (`2`) |
-| `t` | type: server→client `h` hello, `s` state, `e` error, `o` pong; client→server `a` add food, `v` remove food, `i` ping |
+| `t` | type: server→client `h` hello, `s` state, `e` error, `o` pong, `u` presence (viewer count); client→server `a` add food, `v` remove food, `i` ping |
 | `k` | tick (simulation step index) |
 | `r` | plate_radius_mm |
 | `w` | worm_radius_mm |
-| `s` | segments_mm — 13 × `[x,y]` mm |
+| `s` | segments_mm — 13 × `[x,y]` mm (wire: **6** significant figures per coordinate) |
 | `f` | food_mm — list of `[x,y]` mm |
 | `c` | com_mm — centre of mass `[x,y]` mm (one point per state; client builds trajectory) |
+| `n` | concurrent viewer count (`u` only) |
 | `m` | message text (`h` / `e`) |
 | `x`, `y` | position in mm (`a` / `v` from client) |
+| `L` | hello only: connectome layout `{ nm, ax, ay }` — Cook A→P index as `ax`∈[0,1], D/V heuristic as `ay` (see `connectome_layout.py`) |
+| `S` | state: membrane potentials (mV), one float per PAULA neuron id, **4 decimals** |
+| `F` | state: fired flags `0`/`1` per id (same length as `S`) |
 
 Broadcast cadence is **60 Hz** with **latest-state only**: if the sim runs faster, intermediate frames are not queued. If a client send blocks longer than the server timeout, that frame is skipped for that client (the next tick still carries fresh data).
 

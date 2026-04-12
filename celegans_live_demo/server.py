@@ -29,8 +29,10 @@ from simulations.c_elegans.config import (
     N_BODY_SEGMENTS,
 )
 from simulations.c_elegans.environment import AgarPlateEnvironment
+from simulations.c_elegans.neuron_mapping import CElegansNervousSystem
 from simulations.c_elegans.simulation import build_c_elegans_simulation
 
+from celegans_live_demo.connectome_layout import side_view_layout_normalized
 from celegans_live_demo.worm_snapshot import (
     load_evol_config_json,
     try_load_checkpoint,
@@ -39,8 +41,9 @@ from celegans_live_demo.worm_snapshot import (
 
 # --- Compact WebSocket JSON protocol v2 (short keys) ---
 # p  = protocol version (int)
-# t  = message type: "h" hello, "s" state, "e" error, "o" pong (server→client)
+# t  = message type: "h" hello, "s" state, "e" error, "o" pong, "u" presence (server→client)
 #      client→server: "a" add_food, "v" remove_food, "i" ping
+# Presence (t=="u"): n = concurrent WebSocket client count
 # State payload (t=="s"):
 # k  = tick (simulation step)
 # r  = plate_radius_mm
@@ -48,6 +51,8 @@ from celegans_live_demo.worm_snapshot import (
 # s  = segments_mm — list of 13 [x,y] in mm
 # f  = food_mm — list of [x,y] in mm
 # c  = com_mm — centre of mass [x,y] in mm (client builds trajectory locally)
+# S  = membrane (PAULA S) per paula_id, 4 decimal places; F = 0/1 fired (O>0)
+# Hello optional L = {nm, ax, ay} static layout (Cook order AP + name D/V proxy)
 # Hello: m = message (human hint)
 # Error: m = message
 # Client add/remove: x, y = position in mm
@@ -55,6 +60,8 @@ PROTOCOL_VERSION = 2
 BROADCAST_HZ = 60.0
 # Client display does not need float64 text; cap at 10 significant digits (~vs 16).
 WIRE_FLOAT_SIG_DIGITS = 10
+# Spine `s` (segments_mm): tighter payload; 6 significant figures is enough at ~mm scale.
+WIRE_SEGMENT_SIG_DIGITS = 6
 MAX_CLIENTS = 50
 # Global command rate (add_food + remove_food) per rolling window
 RATE_WINDOW_S = 5.0
@@ -122,25 +129,45 @@ def _worm_radius_mm() -> float:
     return float(BODY_RADIUS_M * 1000.0)
 
 
-def _wire_float(x: float) -> float:
-    """Round for JSON wire format: WIRE_FLOAT_SIG_DIGITS significant digits."""
+def _wire_float(x: float, *, sig_digits: int = WIRE_FLOAT_SIG_DIGITS) -> float:
+    """Round for JSON wire format to ``sig_digits`` significant figures."""
     xf = float(x)
     if not math.isfinite(xf):
         return xf
-    return float(f"{xf:.{WIRE_FLOAT_SIG_DIGITS}g}")
+    return float(f"{xf:.{sig_digits}g}")
 
 
-def _quantize_wire_payload(obj: Any) -> Any:
+def _quantize_wire_payload(
+    obj: Any, *, float_sig_digits: int = WIRE_FLOAT_SIG_DIGITS
+) -> Any:
     """Recursively trim floats for WebSocket state (ints and structure preserved)."""
     if isinstance(obj, float):
-        return _wire_float(obj)
+        return _wire_float(obj, sig_digits=float_sig_digits)
     if isinstance(obj, int) and not isinstance(obj, bool):
         return obj
     if isinstance(obj, list):
-        return [_quantize_wire_payload(v) for v in obj]
+        return [
+            _quantize_wire_payload(v, float_sig_digits=float_sig_digits) for v in obj
+        ]
     if isinstance(obj, dict):
-        return {k: _quantize_wire_payload(v) for k, v in obj.items()}
+        return {
+            k: _quantize_wire_payload(v, float_sig_digits=float_sig_digits)
+            for k, v in obj.items()
+        }
     return obj
+
+
+def _quantize_snapshot_for_wire(snap: dict[str, Any]) -> dict[str, Any]:
+    """Like :func:`_quantize_wire_payload` but ``S`` stays 4-decimal; ``s`` uses segment sigfigs."""
+    out: dict[str, Any] = {}
+    for k, v in snap.items():
+        if k == "S":
+            out[k] = v
+        elif k == "s":
+            out[k] = _quantize_wire_payload(v, float_sig_digits=WIRE_SEGMENT_SIG_DIGITS)
+        else:
+            out[k] = _quantize_wire_payload(v)
+    return out
 
 
 class SimRuntime:
@@ -182,6 +209,12 @@ class SimRuntime:
         self._latest: dict[str, Any] = {}
         self._running = threading.Event()
         self._running.set()
+        self._neural_static: dict[str, Any] | None = None
+        ns0 = self.engine.nervous_system
+        if isinstance(ns0, CElegansNervousSystem):
+            names = ns0.get_neuron_names_paula_order()
+            ax, ay = side_view_layout_normalized(names)
+            self._neural_static = {"nm": names, "ax": ax, "ay": ay}
 
     def command_queue(self) -> queue.SimpleQueue[dict[str, Any]]:
         return self._cmd_queue
@@ -252,7 +285,7 @@ class SimRuntime:
             for p in env.get_active_food_positions():
                 food_mm.append([float(p[0] * 1000.0), float(p[1] * 1000.0)])
 
-        return {
+        out: dict[str, Any] = {
             "p": PROTOCOL_VERSION,
             "t": "s",
             "k": int(step.tick),
@@ -262,6 +295,12 @@ class SimRuntime:
             "f": food_mm,
             "c": com_mm,
         }
+        ns = self.engine.nervous_system
+        if isinstance(ns, CElegansNervousSystem):
+            s_raw, f_raw = ns.get_compact_neural_snapshot()
+            out["S"] = [round(float(x), 4) for x in s_raw]
+            out["F"] = [int(x) for x in f_raw]
+        return out
 
     def run_loop(self) -> None:
         try:
@@ -282,6 +321,12 @@ class SimRuntime:
             logger.exception("Simulation thread crashed")
             self._running.clear()
             raise
+        if self._snapshot_path is not None:
+            try:
+                self._drain_commands()
+                write_checkpoint_atomic(self.engine, self._snapshot_path)
+            except Exception:
+                logger.exception("Shutdown worm checkpoint failed")
 
     def get_snapshot(self) -> dict[str, Any]:
         with self._snapshot_lock:
@@ -397,6 +442,40 @@ def main() -> None:
     clients: set[ServerConnection] = set()
     clients_lock = asyncio.Lock()
     cmd_limiter = RateLimiter(RATE_WINDOW_S, RATE_MAX_COMMANDS)
+    broadcast_send_timeout_s = 0.05
+
+    async def broadcast_online_count() -> None:
+        """Notify all clients of current connection count (drops dead peers, retries)."""
+        for _ in range(MAX_CLIENTS + 2):
+            async with clients_lock:
+                n_online = len(clients)
+                payload = json.dumps(
+                    {"p": PROTOCOL_VERSION, "t": "u", "n": n_online},
+                    separators=(",", ":"),
+                )
+                snapshot = list(clients)
+            if not snapshot:
+                return
+            dead: list[ServerConnection] = []
+            for c in snapshot:
+                try:
+                    await asyncio.wait_for(
+                        c.send(payload),
+                        timeout=broadcast_send_timeout_s,
+                    )
+                except TimeoutError:
+                    logger.debug(
+                        "Presence send skipped (timeout {:.0f} ms) for {}",
+                        broadcast_send_timeout_s * 1000,
+                        _ws_peer(c),
+                    )
+                except Exception:
+                    dead.append(c)
+            if not dead:
+                return
+            async with clients_lock:
+                for c in dead:
+                    clients.discard(c)
 
     async def register(ws: ServerConnection) -> bool:
         async with clients_lock:
@@ -411,6 +490,7 @@ def main() -> None:
             clients.discard(ws)
             n = len(clients)
         logger.info("WebSocket disconnected {} ({} clients remain)", peer, n)
+        await broadcast_online_count()
 
     async def handler(ws: ServerConnection) -> None:
         peer = _ws_peer(ws)
@@ -424,15 +504,15 @@ def main() -> None:
             n = len(clients)
         logger.info("WebSocket connected {} ({} clients)", peer, n)
         try:
-            await ws.send(
-                json.dumps(
-                    {
-                        "p": PROTOCOL_VERSION,
-                        "t": "h",
-                        "m": "t=a|v|i  x,y mm  (add food, remove food, ping)",
-                    }
-                )
-            )
+            hello: dict[str, Any] = {
+                "p": PROTOCOL_VERSION,
+                "t": "h",
+                "m": "t=a|v|i  x,y mm  (add food, remove food, ping); S,F on each state",
+            }
+            if rt._neural_static is not None:
+                hello["L"] = rt._neural_static
+            await ws.send(json.dumps(hello, separators=(",", ":")))
+            await broadcast_online_count()
             async for raw in ws:
                 try:
                     msg = json.loads(raw)
@@ -520,9 +600,6 @@ def main() -> None:
         finally:
             await unregister(ws)
 
-    # Per-client: slow send times out so we never block the 60 Hz cadence on one peer.
-    broadcast_send_timeout_s = 0.05
-
     async def broadcast_loop() -> None:
         interval = 1.0 / BROADCAST_HZ
         next_wake = time.monotonic()
@@ -537,7 +614,9 @@ def main() -> None:
             snap = rt.get_snapshot()
             if not snap:
                 continue
-            payload = json.dumps(_quantize_wire_payload(snap), separators=(",", ":"))
+            payload = json.dumps(
+                _quantize_snapshot_for_wire(snap), separators=(",", ":")
+            )
             async with clients_lock:
                 snapshot_clients = list(clients)
             dead: list[ServerConnection] = []
@@ -564,6 +643,8 @@ def main() -> None:
             for c in dead:
                 async with clients_lock:
                     clients.discard(c)
+            if dead:
+                await broadcast_online_count()
 
     async def run() -> None:
         broadcast_task = asyncio.create_task(broadcast_loop())
@@ -588,8 +669,15 @@ def main() -> None:
     try:
         asyncio.run(run())
     except KeyboardInterrupt:
-        rt.stop()
         logger.info("Shutdown requested")
+    finally:
+        rt.stop()
+        sim_thread.join(timeout=120.0)
+        if sim_thread.is_alive():
+            logger.warning(
+                "Simulation thread still running after {:.0f}s (shutdown checkpoint may be incomplete)",
+                120.0,
+            )
 
 
 if __name__ == "__main__":

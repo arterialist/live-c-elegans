@@ -1,6 +1,7 @@
 /**
  * C. elegans live viewer — WebSocket + canvas (pan/zoom, worm spine + parts).
- * Protocol v2: short JSON keys (see README). Trajectory built locally from com (c).
+ * Protocol v2: short JSON keys (see README). Trajectory from `c`; hello `L` (layout);
+ * each state may include `S` (V_m, 4 decimals) and `F` (fired 0/1).
  *
  * Rendering: CSS-pixel space + DPR bitmap; world→view via one canvas transform;
  * continuous requestAnimationFrame for FPS display + smooth lerp between sim ticks.
@@ -28,7 +29,12 @@
   const ctx =
     canvas.getContext("2d", { alpha: false, desynchronized: true }) ||
     canvas.getContext("2d");
+  const neuralCanvas = document.getElementById("cn");
+  const ctxN =
+    neuralCanvas.getContext("2d", { alpha: false, desynchronized: true }) ||
+    neuralCanvas.getContext("2d");
   const statusEl = document.getElementById("status");
+  const onlineEl = document.getElementById("online");
   const tickEl = document.getElementById("tick");
   const fpsEl = document.getElementById("fps");
 
@@ -59,10 +65,32 @@
   let panOrigCx = 0;
   let panOrigCy = 0;
 
-  /** CSS layout size (not bitmap); updated in resize only */
-  let cssW = 800;
-  let cssH = 600;
+  /** Worm panel CSS size; updated in resize */
+  let wormCssW = 800;
+  let wormCssH = 600;
+  /** Neural strip CSS size */
+  let neuralCssW = 800;
+  let neuralCssH = 200;
   let dpr = 1;
+
+  /** @type {number[]|null} layout ax (Cook A→P) from hello L */
+  let layoutAx = null;
+  /** @type {number[]|null} */
+  let layoutAy = null;
+  /** @type {string[]|null} */
+  let layoutNames = null;
+  /** @type {number[]} latest S (4-dec from server) */
+  let lastNeuralS = [];
+  /** @type {number[]} latest F 0/1 */
+  let lastNeuralF = [];
+
+  let hoverNeuronIdx = -1;
+  /** Layout from last drawNeural; used for hover hit-test (CSS px). */
+  let lastNeuralLayout = null;
+  /** Set on worm canvas: `'v'` after remove click, cleared next state tick. */
+  let pendingFoodCmd = null;
+
+  const neuralTooltipEl = document.getElementById("neural-tooltip");
 
   let fpsAccFrames = 0;
   let fpsAccStart = 0;
@@ -149,18 +177,26 @@
 
   function resize() {
     const wrap = document.getElementById("canvas-wrap");
+    const np = document.getElementById("neural-panel");
     dpr = window.devicePixelRatio || 1;
-    cssW = wrap.clientWidth;
-    cssH = wrap.clientHeight;
-    canvas.width = Math.floor(cssW * dpr);
-    canvas.height = Math.floor(cssH * dpr);
-    canvas.style.width = cssW + "px";
-    canvas.style.height = cssH + "px";
+    wormCssW = wrap.clientWidth;
+    wormCssH = wrap.clientHeight;
+    canvas.width = Math.floor(wormCssW * dpr);
+    canvas.height = Math.floor(wormCssH * dpr);
+    canvas.style.width = wormCssW + "px";
+    canvas.style.height = wormCssH + "px";
+
+    neuralCssW = np ? np.clientWidth : 800;
+    neuralCssH = np ? np.clientHeight : 200;
+    neuralCanvas.width = Math.floor(neuralCssW * dpr);
+    neuralCanvas.height = Math.floor(neuralCssH * dpr);
+    neuralCanvas.style.width = neuralCssW + "px";
+    neuralCanvas.style.height = neuralCssH + "px";
   }
 
   function screenToWorld(sx, sy) {
-    const wx = cx + (sx - cssW / 2) / scale;
-    const wy = cy - (sy - cssH / 2) / scale;
+    const wx = cx + (sx - wormCssW / 2) / scale;
+    const wy = cy - (sy - wormCssH / 2) / scale;
     return [wx, wy];
   }
 
@@ -189,7 +225,7 @@
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = "#1a1d24";
-    ctx.fillRect(0, 0, cssW, cssH);
+    ctx.fillRect(0, 0, wormCssW, wormCssH);
 
     if (!lastState || !lastState.segments_mm) {
       ctx.fillStyle = "#888";
@@ -204,7 +240,7 @@
     const segs = lastState.segments_mm;
 
     ctx.save();
-    ctx.translate(cssW / 2, cssH / 2);
+    ctx.translate(wormCssW / 2, wormCssH / 2);
     ctx.scale(scale, -scale);
     ctx.translate(-cx, -cy);
 
@@ -286,6 +322,137 @@
     ctx.restore();
   }
 
+  /** Matches `connectome_layout._dv_offset` range for normalized y mapping. */
+  const NEURAL_AY_LO = -0.62;
+  const NEURAL_AY_HI = 0.62;
+
+  function heatColor(t) {
+    const u = Math.min(1, Math.max(0, t));
+    const r = Math.floor(lerp(35, 255, u));
+    const g = Math.floor(lerp(70, 230, u * u));
+    const b = Math.floor(lerp(190, 45, u));
+    return "rgb(" + r + "," + g + "," + b + ")";
+  }
+
+  function showToast(message) {
+    const stack = document.getElementById("toast-stack");
+    if (!stack) return;
+    const el = document.createElement("div");
+    el.className = "toast";
+    el.textContent = message;
+    stack.appendChild(el);
+    window.setTimeout(() => {
+      el.style.opacity = "0";
+      el.style.transition = "opacity 0.28s ease";
+      window.setTimeout(() => el.remove(), 300);
+    }, 3400);
+    while (stack.children.length > 5) {
+      stack.removeChild(stack.firstChild);
+    }
+  }
+
+  function pickNeuronAtCss(mx, my) {
+    const L = lastNeuralLayout;
+    if (!L || !layoutAx || !layoutAy) return -1;
+    const thresh = (L.rad + 6) * (L.rad + 6);
+    let best = -1;
+    let bestD2 = 1e18;
+    for (let i = 0; i < L.n; i++) {
+      const x = L.marginLR + layoutAx[i] * L.pw;
+      const y = L.marginTop + ((NEURAL_AY_HI - layoutAy[i]) / L.aySpan) * L.ph;
+      const dx = mx - x;
+      const dy = my - y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < bestD2) {
+        bestD2 = d2;
+        best = i;
+      }
+    }
+    if (best < 0 || bestD2 > thresh) return -1;
+    return best;
+  }
+
+  function drawNeural() {
+    ctxN.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctxN.fillStyle = "#151820";
+    ctxN.fillRect(0, 0, neuralCssW, neuralCssH);
+    lastNeuralLayout = null;
+
+    if (!layoutAx || !layoutAy || layoutAx.length !== layoutAy.length) {
+      ctxN.fillStyle = "#777";
+      ctxN.font = "12px system-ui";
+      ctxN.fillText("Waiting for connectome layout (hello L)…", 10, 22);
+      return;
+    }
+
+    const marginLR = 8;
+    const marginTop = 8;
+    const legendBand = 30;
+    const pw = Math.max(1, neuralCssW - 2 * marginLR);
+    const ph = Math.max(1, neuralCssH - marginTop - legendBand);
+    const n = layoutAx.length;
+    const rad = Math.max(1.1, Math.min(3.8, (pw / Math.max(80, n)) * 10));
+    const aySpan = NEURAL_AY_HI - NEURAL_AY_LO;
+
+    lastNeuralLayout = {
+      marginLR,
+      marginTop,
+      legendBand,
+      pw,
+      ph,
+      n,
+      rad,
+      aySpan,
+    };
+
+    let smin = Infinity;
+    let smax = -Infinity;
+    const ns = lastNeuralS.length;
+    for (let i = 0; i < ns; i++) {
+      const v = lastNeuralS[i];
+      if (v < smin) smin = v;
+      if (v > smax) smax = v;
+    }
+    if (!(smax > smin)) {
+      smin = -70;
+      smax = 20;
+    }
+
+    for (let i = 0; i < n; i++) {
+      const x = marginLR + layoutAx[i] * pw;
+      const y = marginTop + ((NEURAL_AY_HI - layoutAy[i]) / aySpan) * ph;
+      let t = 0.5;
+      if (i < ns) {
+        t = (lastNeuralS[i] - smin) / (smax - smin);
+      }
+      ctxN.beginPath();
+      ctxN.arc(x, y, rad, 0, Math.PI * 2);
+      ctxN.fillStyle = heatColor(t);
+      ctxN.fill();
+      if (i < lastNeuralF.length && lastNeuralF[i]) {
+        ctxN.strokeStyle = "rgba(255,255,255,0.92)";
+        ctxN.lineWidth = 2;
+        ctxN.stroke();
+      }
+      if (i === hoverNeuronIdx) {
+        ctxN.strokeStyle = "rgba(255, 210, 120, 0.95)";
+        ctxN.lineWidth = 2.5;
+        ctxN.beginPath();
+        ctxN.arc(x, y, rad + 2.2, 0, Math.PI * 2);
+        ctxN.stroke();
+      }
+    }
+
+    ctxN.fillStyle = "#7a8a9a";
+    ctxN.font = "11px system-ui";
+    const legendY = neuralCssH - 8;
+    ctxN.fillText(
+      "Cook A→P (x) · D↑ V↓ (y) · fill=V_m · ring=fired",
+      marginLR,
+      legendY
+    );
+  }
+
   function applyStateMsg(msg) {
     const now = performance.now();
     const incoming = {
@@ -295,6 +462,12 @@
       segments_mm: msg.s,
       food_mm: msg.f,
     };
+
+    const prevFoodN =
+      targetState && Array.isArray(targetState.food_mm)
+        ? targetState.food_mm.length
+        : -1;
+    const newFoodN = Array.isArray(incoming.food_mm) ? incoming.food_mm.length : 0;
 
     let dtSinceLast = 0;
     if (lastMsgAtMs > 0) {
@@ -328,10 +501,29 @@
     }
     tickEl.textContent = "tick " + msg.k;
     if (!viewFitted && msg.r) {
-      scale = (Math.min(cssW, cssH) / (2 * msg.r)) * 0.88;
+      scale = (Math.min(wormCssW, wormCssH) / (2 * msg.r)) * 0.88;
       cx = 0;
       cy = 0;
       viewFitted = true;
+    }
+
+    if (Array.isArray(msg.S)) {
+      lastNeuralS = msg.S.map(Number);
+    }
+    if (Array.isArray(msg.F)) {
+      lastNeuralF = msg.F.map((v) => (Number(v) ? 1 : 0));
+    }
+
+    if (prevFoodN >= 0 && newFoodN < prevFoodN) {
+      const d = prevFoodN - newFoodN;
+      if (pendingFoodCmd === "v") {
+        showToast(d === 1 ? "Pellet removed" : d + " pellets removed");
+      } else {
+        showToast(d === 1 ? "Food eaten!" : d + " pellets eaten!");
+      }
+    }
+    if (pendingFoodCmd === "v") {
+      pendingFoodCmd = null;
     }
   }
 
@@ -342,6 +534,7 @@
     ws.onopen = () => {
       statusEl.textContent = "Connected";
       statusEl.className = "ok";
+      if (onlineEl) onlineEl.textContent = "… online";
       trajectoryMm.length = 0;
       targetState = null;
       originState = null;
@@ -349,10 +542,17 @@
       tickMsEma = DEFAULT_TICK_MS;
       blendSpanMs = DEFAULT_TICK_MS;
       viewFitted = false;
+      layoutAx = null;
+      layoutAy = null;
+      layoutNames = null;
+      lastNeuralS = [];
+      lastNeuralF = [];
+      pendingFoodCmd = null;
     };
     ws.onclose = () => {
       statusEl.textContent = "Disconnected (retry in 3s)";
       statusEl.className = "err";
+      if (onlineEl) onlineEl.textContent = "— online";
       setTimeout(connect, 3000);
     };
     ws.onerror = () => {
@@ -363,8 +563,17 @@
       try {
         const msg = JSON.parse(ev.data);
         if (msg.p !== PROTOCOL) return;
-        if (msg.t === "s") {
+        if (msg.t === "h") {
+          if (msg.L && Array.isArray(msg.L.ax) && Array.isArray(msg.L.ay)) {
+            layoutAx = msg.L.ax.map(Number);
+            layoutAy = msg.L.ay.map(Number);
+            layoutNames = Array.isArray(msg.L.nm) ? msg.L.nm : null;
+          }
+        } else if (msg.t === "s") {
           applyStateMsg(msg);
+        } else if (msg.t === "u" && typeof msg.n === "number" && onlineEl) {
+          const n = msg.n;
+          onlineEl.textContent = (n === 1 ? "1 viewer" : n + " viewers") + " online";
         }
       } catch (_) {
         /* ignore */
@@ -377,6 +586,7 @@
   function animFrame(now) {
     requestAnimationFrame(animFrame);
     draw(now);
+    drawNeural();
   }
 
   canvas.addEventListener("mousedown", (e) => {
@@ -391,13 +601,14 @@
     }
     if (!window._ws || window._ws.readyState !== WebSocket.OPEN) return;
     const rect = canvas.getBoundingClientRect();
-    const sx = ((e.clientX - rect.left) / rect.width) * cssW;
-    const sy = ((e.clientY - rect.top) / rect.height) * cssH;
+    const sx = ((e.clientX - rect.left) / rect.width) * wormCssW;
+    const sy = ((e.clientY - rect.top) / rect.height) * wormCssH;
     const [wx, wy] = screenToWorld(sx, sy);
     const base = { p: PROTOCOL, x: wx, y: wy };
     if (e.button === 0) {
       window._ws.send(JSON.stringify({ ...base, t: "a" }));
     } else if (e.button === 2) {
+      pendingFoodCmd = "v";
       window._ws.send(JSON.stringify({ ...base, t: "v" }));
     }
   });
@@ -421,19 +632,51 @@
     (e) => {
       e.preventDefault();
       const rect = canvas.getBoundingClientRect();
-      const sx = ((e.clientX - rect.left) / rect.width) * cssW;
-      const sy = ((e.clientY - rect.top) / rect.height) * cssH;
+      const sx = ((e.clientX - rect.left) / rect.width) * wormCssW;
+      const sy = ((e.clientY - rect.top) / rect.height) * wormCssH;
       const [wmx, wmy] = screenToWorld(sx, sy);
       const factor = e.deltaY > 0 ? 0.92 : 1.08;
       const newScale = Math.min(MAX_SCALE_PX_PER_MM, Math.max(0.25, scale * factor));
       scale = newScale;
-      cx = wmx - (sx - cssW / 2) / scale;
-      cy = wmy + (sy - cssH / 2) / scale;
+      cx = wmx - (sx - wormCssW / 2) / scale;
+      cy = wmy + (sy - wormCssH / 2) / scale;
     },
     { passive: false }
   );
 
   window.addEventListener("resize", resize);
+
+  neuralCanvas.addEventListener("mousemove", (e) => {
+    const rect = neuralCanvas.getBoundingClientRect();
+    const mx = ((e.clientX - rect.left) / rect.width) * neuralCssW;
+    const my = ((e.clientY - rect.top) / rect.height) * neuralCssH;
+    const idx = pickNeuronAtCss(mx, my);
+    hoverNeuronIdx = idx;
+    neuralCanvas.style.cursor = idx >= 0 ? "pointer" : "default";
+    if (neuralTooltipEl) {
+      if (idx >= 0 && layoutNames && layoutNames[idx]) {
+        let line = layoutNames[idx];
+        if (idx < lastNeuralS.length) {
+          line += " · V_m=" + lastNeuralS[idx];
+        }
+        if (idx < lastNeuralF.length && lastNeuralF[idx]) {
+          line += " · fired";
+        }
+        neuralTooltipEl.textContent = line;
+        neuralTooltipEl.style.display = "block";
+        neuralTooltipEl.style.left = e.clientX + 12 + "px";
+        neuralTooltipEl.style.top = e.clientY + 12 + "px";
+      } else {
+        neuralTooltipEl.style.display = "none";
+      }
+    }
+  });
+
+  neuralCanvas.addEventListener("mouseleave", () => {
+    hoverNeuronIdx = -1;
+    neuralCanvas.style.cursor = "default";
+    if (neuralTooltipEl) neuralTooltipEl.style.display = "none";
+  });
 
   resize();
   connect();
