@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>C. elegans Live Simulation</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #1a1d24;
+        color: #e8eaef;
+        font-family: system-ui, sans-serif;
+      }
+      #bar {
+        padding: 8px 12px;
+        font-size: 13px;
+        border-bottom: 1px solid #333;
+        display: flex;
+        gap: 16px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      #bar span.ok {
+        color: #6c9;
+      }
+      #bar span.err {
+        color: #e88;
+      }
+      #canvas-wrap {
+        height: calc(100% - 42px);
+        position: relative;
+      }
+      canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+        cursor: crosshair;
+      }
+      kbd {
+        background: #333;
+        padding: 2px 6px;
+        border-radius: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="bar">
+      <span id="status">Disconnected</span>
+      <span id="tick"></span>
+      <span id="fps" title="Display frames per second">— fps</span>
+      <span
+        >Left: add food · Right: remove · <kbd>Shift</kbd>+drag: pan · Wheel:
+        zoom</span
+      >
+    </div>
+    <div id="canvas-wrap">
+      <canvas id="c"></canvas>
+    </div>
+    <script src="app.js"></script>
+  </body>
+</html>
