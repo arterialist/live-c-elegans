@@ -2,6 +2,8 @@
 
 Runs the [active-inference](https://github.com/arterialist/active-inference) simulation on your machine and streams state to a static **canvas** page over **WebSockets**. Food add/remove matches the matplotlib interactive viewer (left / right click).
 
+**Public viewer:** [https://jimmy.arteriali.st](https://jimmy.arteriali.st) (static `web/` build). The browser uses the WebSocket URL from the `ws` query parameter if set, otherwise `DEFAULT_WS_URL` in `web/app.js`—point that constant or `?ws=` at a reachable **`wss://`** server running `celegans-demo-server`.
+
 ## Prerequisites
 
 - Same environment expectations as `active-inference` (Python 3.11+, MuJoCo, connectome cache after first run).
@@ -43,18 +45,18 @@ Checkpoint JSON includes `checkpoint_version` (currently **1**), `tick`, `qpos` 
 cd web && python -m http.server 8080
 ```
 
-Open `http://127.0.0.1:8080/` — the default WebSocket URL is `ws://127.0.0.1:8765` (edit `DEFAULT_WS_URL` in `app.js` for production **WSS** behind your tunnel).
-
-Override for testing:
+Open `http://127.0.0.1:8080/` and pass your local server, for example:
 
 ```
-http://127.0.0.1:8080/?ws=ws://127.0.0.1:9999
+http://127.0.0.1:8080/?ws=ws://127.0.0.1:8765
 ```
+
+(Otherwise the page uses the checked-in `DEFAULT_WS_URL` in `app.js`, which is set for a public **WSS** tunnel in production builds.)
 
 ## How to deploy
 
-1. Deploy the `web/` folder to any static host (GitHub Pages, Netlify, Vercel, etc.).
-2. Set `DEFAULT_WS_URL` in `app.js` to your public **`wss://`** endpoint (Cloudflare Tunnel, ngrok, …) pointing at this server’s port.
+1. Deploy the `web/` folder to any static host (GitHub Pages, Netlify, Vercel, etc.). The project’s public static build is served at **[https://jimmy.arteriali.st](https://jimmy.arteriali.st)**.
+2. Set `DEFAULT_WS_URL` in `app.js` to your public **`wss://`** endpoint (Cloudflare Tunnel, ngrok, …) pointing at this server’s port, or rely on `?ws=` for ad-hoc backends.
 3. Keep `celegans-demo-server` + tunnel running while the “live worm” should be visible.
 
 ## Protocol (version 2, compact keys)
