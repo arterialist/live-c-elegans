@@ -70,6 +70,7 @@
         width: 100%;
         height: 100%;
         cursor: crosshair;
+        touch-action: none;
       }
       #neural-panel {
         flex-shrink: 0;
@@ -82,6 +83,7 @@
         display: block;
         width: 100%;
         height: 100%;
+        touch-action: none;
       }
       #toast-stack {
         position: fixed;
@@ -235,9 +237,11 @@
       <span id="online"></span>
       <span id="tick"></span>
       <span id="fps" title="Display frames per second">— fps</span>
-      <span
-        >Left: add food · Right: remove · <kbd>Shift</kbd>+drag: pan · Wheel:
-        zoom · bottom: 302 PAULA cells — hover name, click for details</span
+      <span id="controls-hint"
+        >Desktop: left add · right remove · <kbd>Shift</kbd>+drag pan · wheel
+        zoom · Touch: drag pan · tap add · long-press remove · pinch zoom ·
+        bottom: 302 PAULA — desktop: hover for tooltip · tap for details · touch:
+        tap a cell for details (no hover tooltip)</span
       >
       <button type="button" id="alerts-toggle" title="Browser notifications + sound for food and viewer join/leave (after permission)">
         Alerts: off

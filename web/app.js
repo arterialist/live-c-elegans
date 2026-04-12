@@ -24,6 +24,14 @@
   const EXTRAP_MAX_FRAC = 0.42;
   /** Hard cap on extrapolation (ms) so corrections stay small. */
   const EXTRAP_MAX_MS = 90;
+  /** Touch: tap if press shorter than this (ms) and movement under slop. */
+  const TOUCH_TAP_MAX_MS = 380;
+  /** Touch: movement under this (CSS px) counts as tap / long-press anchor. */
+  const TOUCH_TAP_MAX_DIST_PX = 14;
+  /** Touch: hold still this long to remove food at press point. */
+  const TOUCH_LONG_PRESS_MS = 520;
+  /** Pinch: ignore smaller finger separation (CSS px) to avoid unstable zoom. */
+  const PINCH_MIN_DIST_PX = 12;
 
   const params = new URLSearchParams(window.location.search);
   const WS_URL = params.get("ws") || DEFAULT_WS_URL;
@@ -70,6 +78,26 @@
   let panStartY = 0;
   let panOrigCx = 0;
   let panOrigCy = 0;
+  /** Which pointer is driving mouse-style pan (middle or shift+left). */
+  let panPointerId = -1;
+
+  /** Active pointers on worm canvas id → last client position. */
+  const wormPtr = new Map();
+  /** Previous pinch finger separation (CSS worm space) for incremental zoom. */
+  let pinchPrevDist = 0;
+
+  let touchDownId = -1;
+  let touchDownClientX = 0;
+  let touchDownClientY = 0;
+  let touchDownAt = 0;
+  let touchPanSlopPassed = false;
+  let touchLongPressTimer = 0;
+  let touchLongPressSent = false;
+
+  /** Neural strip: pointer down for tap vs scroll discrimination. */
+  let neuralDownClientX = 0;
+  let neuralDownClientY = 0;
+  let neuralDownAt = 0;
 
   /** Worm panel CSS size; updated in resize */
   let wormCssW = 800;
@@ -380,6 +408,63 @@
     return [wx, wy];
   }
 
+  /** Viewport client coords → worm panel CSS pixel coords. */
+  function clientToWormCss(clientX, clientY) {
+    const rect = canvas.getBoundingClientRect();
+    const sx = ((clientX - rect.left) / rect.width) * wormCssW;
+    const sy = ((clientY - rect.top) / rect.height) * wormCssH;
+    return [sx, sy];
+  }
+
+  function sendFoodAddWorld(wx, wy) {
+    if (!window._ws || window._ws.readyState !== WebSocket.OPEN) return;
+    window._ws.send(JSON.stringify({ p: PROTOCOL, t: "a", x: wx, y: wy }));
+  }
+
+  function sendFoodRemoveWorld(wx, wy) {
+    if (!window._ws || window._ws.readyState !== WebSocket.OPEN) return;
+    window._ws.send(JSON.stringify({ p: PROTOCOL, t: "v", x: wx, y: wy }));
+  }
+
+  /** Zoom about (sx,sy) in worm CSS space; factor < 1 zooms out. */
+  function applyZoomAtCss(sx, sy, factor) {
+    const [wmx, wmy] = screenToWorld(sx, sy);
+    const newScale = Math.min(
+      MAX_SCALE_PX_PER_MM,
+      Math.max(0.25, scale * factor)
+    );
+    scale = newScale;
+    cx = wmx - (sx - wormCssW / 2) / scale;
+    cy = wmy + (sy - wormCssH / 2) / scale;
+  }
+
+  function wormPinchMetrics() {
+    if (wormPtr.size !== 2) return null;
+    const pts = Array.from(wormPtr.values());
+    const a = pts[0];
+    const b = pts[1];
+    const [sx0, sy0] = clientToWormCss(a.clientX, a.clientY);
+    const [sx1, sy1] = clientToWormCss(b.clientX, b.clientY);
+    const dist = Math.hypot(sx1 - sx0, sy1 - sy0);
+    const midSx = (sx0 + sx1) / 2;
+    const midSy = (sy0 + sy1) / 2;
+    return { dist, midSx, midSy };
+  }
+
+  function clearTouchLongPress() {
+    if (touchLongPressTimer) {
+      clearTimeout(touchLongPressTimer);
+      touchLongPressTimer = 0;
+    }
+  }
+
+  function resetTouchOneFinger() {
+    clearTouchLongPress();
+    touchDownId = -1;
+    touchPanSlopPassed = false;
+    touchLongPressSent = false;
+  }
+
   /** Line width in world units for ~`px` screen pixels under current `scale`. */
   function lineWidthWorld(px) {
     return px / scale;
@@ -654,6 +739,15 @@
     return best;
   }
 
+  /** Tooltip + hover ring only when the UA reports real hover (not touch-primary). */
+  function neuralFineHoverCapable() {
+    try {
+      return window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+    } catch (_) {
+      return true;
+    }
+  }
+
   function neuronModalIsOpen() {
     return Boolean(neuronModalEl && !neuronModalEl.hidden);
   }
@@ -661,6 +755,10 @@
   /** Refresh tooltip text/position from latest S/F (call from rAF and mousemove). */
   function syncNeuralTooltipFromHover() {
     if (!neuralTooltipEl || neuronModalIsOpen()) return;
+    if (!neuralFineHoverCapable()) {
+      neuralTooltipEl.style.display = "none";
+      return;
+    }
     const idx = hoverNeuronIdx;
     if (idx < 0 || !layoutNames || !layoutNames[idx]) {
       neuralTooltipEl.style.display = "none";
@@ -775,7 +873,7 @@
         ctxN.lineWidth = 2;
         ctxN.stroke();
       }
-      if (i === hoverNeuronIdx) {
+      if (neuralFineHoverCapable() && i === hoverNeuronIdx) {
         ctxN.strokeStyle = "rgba(255, 210, 120, 0.95)";
         ctxN.lineWidth = 2.5;
         ctxN.beginPath();
@@ -924,41 +1022,6 @@
     syncNeuralTooltipFromHover();
   }
 
-  canvas.addEventListener("mousedown", (e) => {
-    if (e.button === 1 || (e.button === 0 && e.shiftKey)) {
-      panning = true;
-      panStartX = e.clientX;
-      panStartY = e.clientY;
-      panOrigCx = cx;
-      panOrigCy = cy;
-      e.preventDefault();
-      return;
-    }
-    if (!window._ws || window._ws.readyState !== WebSocket.OPEN) return;
-    const rect = canvas.getBoundingClientRect();
-    const sx = ((e.clientX - rect.left) / rect.width) * wormCssW;
-    const sy = ((e.clientY - rect.top) / rect.height) * wormCssH;
-    const [wx, wy] = screenToWorld(sx, sy);
-    const base = { p: PROTOCOL, x: wx, y: wy };
-    if (e.button === 0) {
-      window._ws.send(JSON.stringify({ ...base, t: "a" }));
-    } else if (e.button === 2) {
-      window._ws.send(JSON.stringify({ ...base, t: "v" }));
-    }
-  });
-
-  canvas.addEventListener("mousemove", (e) => {
-    if (!panning) return;
-    const dx = e.clientX - panStartX;
-    const dy = e.clientY - panStartY;
-    cx = panOrigCx - dx / scale;
-    cy = panOrigCy + dy / scale;
-  });
-
-  window.addEventListener("mouseup", () => {
-    panning = false;
-  });
-
   canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 
   canvas.addEventListener(
@@ -968,21 +1031,213 @@
       const rect = canvas.getBoundingClientRect();
       const sx = ((e.clientX - rect.left) / rect.width) * wormCssW;
       const sy = ((e.clientY - rect.top) / rect.height) * wormCssH;
-      const [wmx, wmy] = screenToWorld(sx, sy);
       const factor = e.deltaY > 0 ? 0.92 : 1.08;
-      const newScale = Math.min(MAX_SCALE_PX_PER_MM, Math.max(0.25, scale * factor));
-      scale = newScale;
-      cx = wmx - (sx - wormCssW / 2) / scale;
-      cy = wmy + (sy - wormCssH / 2) / scale;
+      applyZoomAtCss(sx, sy, factor);
     },
     { passive: false }
   );
 
+  canvas.addEventListener(
+    "pointerdown",
+    (e) => {
+      if (e.pointerType === "touch") {
+        wormPtr.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
+      }
+
+      if (e.pointerType === "mouse") {
+        if (e.button === 1 || (e.button === 0 && e.shiftKey)) {
+          panning = true;
+          panPointerId = e.pointerId;
+          panStartX = e.clientX;
+          panStartY = e.clientY;
+          panOrigCx = cx;
+          panOrigCy = cy;
+          try {
+            canvas.setPointerCapture(e.pointerId);
+          } catch (_) {}
+          e.preventDefault();
+          return;
+        }
+        if (e.button === 0 && !e.shiftKey) {
+          const [sx, sy] = clientToWormCss(e.clientX, e.clientY);
+          const [wx, wy] = screenToWorld(sx, sy);
+          sendFoodAddWorld(wx, wy);
+          e.preventDefault();
+          return;
+        }
+        if (e.button === 2) {
+          const [sx, sy] = clientToWormCss(e.clientX, e.clientY);
+          const [wx, wy] = screenToWorld(sx, sy);
+          sendFoodRemoveWorld(wx, wy);
+          e.preventDefault();
+          return;
+        }
+        return;
+      }
+
+      if (e.pointerType === "touch") {
+        if (wormPtr.size === 2) {
+          resetTouchOneFinger();
+          pinchPrevDist = 0;
+          try {
+            canvas.setPointerCapture(e.pointerId);
+          } catch (_) {}
+          e.preventDefault();
+          return;
+        }
+        if (wormPtr.size === 1) {
+          touchDownId = e.pointerId;
+          touchDownClientX = e.clientX;
+          touchDownClientY = e.clientY;
+          touchDownAt = performance.now();
+          touchPanSlopPassed = false;
+          touchLongPressSent = false;
+          clearTouchLongPress();
+          touchLongPressTimer = window.setTimeout(() => {
+            touchLongPressTimer = 0;
+            if (touchDownId !== e.pointerId || touchLongPressSent) return;
+            if (wormPtr.size !== 1) return;
+            if (touchPanSlopPassed) return;
+            const [sx, sy] = clientToWormCss(touchDownClientX, touchDownClientY);
+            const [wx, wy] = screenToWorld(sx, sy);
+            sendFoodRemoveWorld(wx, wy);
+            touchLongPressSent = true;
+          }, TOUCH_LONG_PRESS_MS);
+          try {
+            canvas.setPointerCapture(e.pointerId);
+          } catch (_) {}
+          e.preventDefault();
+        }
+      }
+    },
+    { passive: false }
+  );
+
+  canvas.addEventListener(
+    "pointermove",
+    (e) => {
+      if (e.pointerType === "touch") {
+        const rec = wormPtr.get(e.pointerId);
+        if (rec) {
+          rec.clientX = e.clientX;
+          rec.clientY = e.clientY;
+        }
+      }
+
+      if (wormPtr.size === 2) {
+        const m = wormPinchMetrics();
+        if (m && m.dist >= 1) {
+          if (pinchPrevDist < 1) {
+            pinchPrevDist = Math.max(m.dist, PINCH_MIN_DIST_PX);
+          } else {
+            const factor = m.dist / pinchPrevDist;
+            if (Math.abs(factor - 1) > 0.0015) {
+              applyZoomAtCss(m.midSx, m.midSy, factor);
+            }
+            pinchPrevDist = m.dist;
+          }
+        }
+        e.preventDefault();
+        return;
+      }
+
+      if (panning && e.pointerId === panPointerId) {
+        const dx = e.clientX - panStartX;
+        const dy = e.clientY - panStartY;
+        cx = panOrigCx - dx / scale;
+        cy = panOrigCy + dy / scale;
+        return;
+      }
+
+      if (
+        e.pointerType === "touch" &&
+        touchDownId === e.pointerId &&
+        wormPtr.size === 1
+      ) {
+        const dx = e.clientX - touchDownClientX;
+        const dy = e.clientY - touchDownClientY;
+        const slop2 = TOUCH_TAP_MAX_DIST_PX * TOUCH_TAP_MAX_DIST_PX;
+        if (!touchPanSlopPassed && dx * dx + dy * dy > slop2) {
+          clearTouchLongPress();
+          touchPanSlopPassed = true;
+          panStartX = e.clientX;
+          panStartY = e.clientY;
+          panOrigCx = cx;
+          panOrigCy = cy;
+        }
+        if (touchPanSlopPassed) {
+          const pdx = e.clientX - panStartX;
+          const pdy = e.clientY - panStartY;
+          cx = panOrigCx - pdx / scale;
+          cy = panOrigCy + pdy / scale;
+        }
+        e.preventDefault();
+      }
+    },
+    { passive: false }
+  );
+
+  function wormPointerUp(e) {
+    const wasTwo = wormPtr.size === 2;
+    if (e.pointerType === "touch") {
+      wormPtr.delete(e.pointerId);
+    }
+
+    if (e.pointerId === panPointerId) {
+      panning = false;
+      panPointerId = -1;
+    }
+
+    if (wasTwo && wormPtr.size < 2) {
+      pinchPrevDist = 0;
+      resetTouchOneFinger();
+    }
+
+    if (e.pointerType === "touch" && e.pointerId === touchDownId) {
+      const dur = performance.now() - touchDownAt;
+      const dx = e.clientX - touchDownClientX;
+      const dy = e.clientY - touchDownClientY;
+      const slop2 = TOUCH_TAP_MAX_DIST_PX * TOUCH_TAP_MAX_DIST_PX;
+      const moved = dx * dx + dy * dy > slop2;
+      if (
+        !touchPanSlopPassed &&
+        !moved &&
+        !touchLongPressSent &&
+        dur < TOUCH_TAP_MAX_MS
+      ) {
+        const [sx, sy] = clientToWormCss(e.clientX, e.clientY);
+        const [wx, wy] = screenToWorld(sx, sy);
+        sendFoodAddWorld(wx, wy);
+      }
+      resetTouchOneFinger();
+    }
+
+    try {
+      canvas.releasePointerCapture(e.pointerId);
+    } catch (_) {}
+  }
+
+  canvas.addEventListener("pointerup", wormPointerUp);
+  canvas.addEventListener("pointercancel", wormPointerUp);
+
+  window.addEventListener("pointerup", (e) => {
+    if (e.pointerId === panPointerId) {
+      panning = false;
+      panPointerId = -1;
+    }
+  });
+
   window.addEventListener("resize", resize);
 
-  neuralCanvas.addEventListener("mousemove", (e) => {
+  function neuralPointerMove(e) {
     neuralHoverClientX = e.clientX;
     neuralHoverClientY = e.clientY;
+    if (!neuralFineHoverCapable()) {
+      hoverNeuronIdx = -1;
+      neuralCanvas.style.cursor = "default";
+      if (neuralTooltipEl) neuralTooltipEl.style.display = "none";
+      return;
+    }
     const rect = neuralCanvas.getBoundingClientRect();
     const mx = ((e.clientX - rect.left) / rect.width) * neuralCssW;
     const my = ((e.clientY - rect.top) / rect.height) * neuralCssH;
@@ -990,15 +1245,37 @@
     hoverNeuronIdx = idx;
     neuralCanvas.style.cursor = idx >= 0 ? "pointer" : "default";
     syncNeuralTooltipFromHover();
-  });
+  }
 
-  neuralCanvas.addEventListener("mouseleave", () => {
+  neuralCanvas.addEventListener("pointermove", neuralPointerMove);
+
+  neuralCanvas.addEventListener("pointerleave", () => {
     hoverNeuronIdx = -1;
     neuralCanvas.style.cursor = "default";
     if (neuralTooltipEl) neuralTooltipEl.style.display = "none";
+    neuralDownAt = 0;
   });
 
-  neuralCanvas.addEventListener("click", (e) => {
+  neuralCanvas.addEventListener("pointerdown", (e) => {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    neuralDownClientX = e.clientX;
+    neuralDownClientY = e.clientY;
+    neuralDownAt = performance.now();
+  });
+
+  neuralCanvas.addEventListener("pointercancel", () => {
+    neuralDownAt = 0;
+  });
+
+  neuralCanvas.addEventListener("pointerup", (e) => {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    if (!neuralDownAt) return;
+    const dur = performance.now() - neuralDownAt;
+    const dx = e.clientX - neuralDownClientX;
+    const dy = e.clientY - neuralDownClientY;
+    neuralDownAt = 0;
+    if (dx * dx + dy * dy > 20 * 20) return;
+    if (dur > 700) return;
     const rect = neuralCanvas.getBoundingClientRect();
     const mx = ((e.clientX - rect.left) / rect.width) * neuralCssW;
     const my = ((e.clientY - rect.top) / rect.height) * neuralCssH;
