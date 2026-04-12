@@ -75,6 +75,7 @@ Wire format uses short keys and **no server-side trajectory** (the client append
 | `m` | message text (`h` / `e`) |
 | `x`, `y` | position in mm (`a` / `v` from client) |
 | `L` | hello only: connectome layout `{ nm, ax, ay }` — Cook A→P index as `ax`∈[0,1], D/V heuristic as `ay` (see `connectome_layout.py`) |
+| `M` | hello only: parallel to `nm`: `{ k, ic, ig, oc, og }` per neuron — `k` = class (`s` sensory / `m` motor / `i` interneuron / `u` unknown); `ic`/`oc` = in/out chemical synapse degree, `ig`/`og` = gap junction degree (Cook connectome) |
 | `S` | state: membrane potentials (mV), one float per PAULA neuron id, **4 decimals** |
 | `F` | state: fired flags `0`/`1` per id (same length as `S`) |
 

@@ -117,6 +117,97 @@
         padding: 2px 6px;
         border-radius: 4px;
       }
+      #neuron-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 2000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 16px;
+        box-sizing: border-box;
+      }
+      #neuron-modal[hidden] {
+        display: none !important;
+      }
+      #neuron-modal .neuron-modal-backdrop {
+        position: absolute;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.55);
+        cursor: pointer;
+      }
+      #neuron-modal .neuron-modal-panel {
+        position: relative;
+        width: 100%;
+        max-width: 520px;
+        max-height: 85vh;
+        overflow: auto;
+        background: #222833;
+        border: 1px solid #3d4555;
+        border-radius: 12px;
+        padding: 22px 24px 20px;
+        box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+        color: #e8eaef;
+      }
+      #neuron-modal .neuron-modal-close {
+        position: absolute;
+        top: 10px;
+        right: 12px;
+        width: 36px;
+        height: 36px;
+        border: none;
+        border-radius: 8px;
+        background: #2c3342;
+        color: #e8eaef;
+        font-size: 22px;
+        line-height: 1;
+        cursor: pointer;
+      }
+      #neuron-modal .neuron-modal-close:hover {
+        background: #3a4255;
+      }
+      #neuron-modal h2 {
+        margin: 0 40px 14px 0;
+        font-size: 1.35rem;
+        font-weight: 600;
+      }
+      #neuron-modal .neuron-modal-intro {
+        margin: 0 0 14px;
+        font-size: 13px;
+        line-height: 1.45;
+        color: #b8c0d0;
+      }
+      #neuron-modal dl {
+        margin: 0 0 16px;
+        display: grid;
+        grid-template-columns: 11rem 1fr;
+        gap: 6px 12px;
+        font-size: 13px;
+      }
+      #neuron-modal dt {
+        color: #8a95a8;
+      }
+      #neuron-modal dd {
+        margin: 0;
+      }
+      #neuron-modal h3 {
+        margin: 18px 0 8px;
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: #c5cddc;
+      }
+      #neuron-modal ul.links {
+        margin: 0;
+        padding-left: 1.1rem;
+        font-size: 13px;
+        line-height: 1.55;
+      }
+      #neuron-modal ul.links a {
+        color: #8cb4ff;
+      }
+      #neuron-modal ul.links a:visited {
+        color: #b39ddb;
+      }
     </style>
   </head>
   <body>
@@ -127,7 +218,7 @@
       <span id="fps" title="Display frames per second">— fps</span>
       <span
         >Left: add food · Right: remove · <kbd>Shift</kbd>+drag: pan · Wheel:
-        zoom · bottom: 302 PAULA cells (Cook A→P × D/V heuristic)</span
+        zoom · bottom: 302 PAULA cells — hover name, click for details</span
       >
     </div>
     <div id="main-split">
@@ -142,6 +233,16 @@
     </div>
     <div id="toast-stack" aria-live="polite" aria-relevant="additions"></div>
     <div id="neural-tooltip" role="tooltip"></div>
+    <div id="neuron-modal" hidden role="dialog" aria-modal="true" aria-labelledby="neuron-modal-title">
+      <div class="neuron-modal-backdrop" data-close-neuron-modal="1"></div>
+      <div class="neuron-modal-panel">
+        <button type="button" class="neuron-modal-close" aria-label="Close" data-close-neuron-modal="1">
+          &times;
+        </button>
+        <h2 id="neuron-modal-title"></h2>
+        <div id="neuron-modal-body"></div>
+      </div>
+    </div>
     <script src="app.js"></script>
   </body>
 </html>

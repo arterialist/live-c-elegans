@@ -2,6 +2,7 @@
  * C. elegans live viewer — WebSocket + canvas (pan/zoom, worm spine + parts).
  * Protocol v2: short JSON keys (see README). Trajectory from `c`; hello `L` (layout);
  * each state may include `S` (V_m, 4 decimals) and `F` (fired 0/1).
+ * Hello `M` = connectome metadata per neuron (parallel to `L.nm`).
  *
  * Rendering: CSS-pixel space + DPR bitmap; world→view via one canvas transform;
  * continuous requestAnimationFrame for FPS display + smooth lerp between sim ticks.
@@ -79,18 +80,156 @@
   let layoutAy = null;
   /** @type {string[]|null} */
   let layoutNames = null;
+  /** Hello `M`: Cook connectome row per PAULA id (parallel to `nm`). */
+  let neuronMeta = null;
   /** @type {number[]} latest S (4-dec from server) */
   let lastNeuralS = [];
   /** @type {number[]} latest F 0/1 */
   let lastNeuralF = [];
 
   let hoverNeuronIdx = -1;
+  /** Last pointer over neural canvas (viewport px); tooltip anchor while mouse is still. */
+  let neuralHoverClientX = 0;
+  let neuralHoverClientY = 0;
   /** Layout from last drawNeural; used for hover hit-test (CSS px). */
   let lastNeuralLayout = null;
   /** Set on worm canvas: `'v'` after remove click, cleared next state tick. */
   let pendingFoodCmd = null;
 
   const neuralTooltipEl = document.getElementById("neural-tooltip");
+  const neuronModalEl = document.getElementById("neuron-modal");
+
+  const NEURON_KIND_LABEL = {
+    s: "Sensory",
+    m: "Motor",
+    i: "Interneuron",
+    u: "Unknown / other",
+  };
+  const COOK_2019_URL = "https://doi.org/10.1038/s41586-019-1352-7";
+  const WORMBOOK_NEURO_URL =
+    "https://www.wormbook.org/chapters/www_celegansVolII/neurobiology.html";
+  const WORMWIRING_COOK_URL = "https://wormwiring.org/pages/emmonslab.html";
+
+  function wormBaseSearchUrl(name) {
+    return "https://wormbase.org/search/site/" + encodeURIComponent(name);
+  }
+
+  function pubmedNeuronLiteratureUrl(name) {
+    return (
+      "https://pubmed.ncbi.nlm.nih.gov/?term=" +
+      encodeURIComponent("Caenorhabditis elegans AND " + name)
+    );
+  }
+
+  function appendLinkItem(ul, href, label) {
+    const li = document.createElement("li");
+    const a = document.createElement("a");
+    a.href = href;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    a.textContent = label;
+    li.appendChild(a);
+    ul.appendChild(li);
+  }
+
+  function onNeuronModalKey(e) {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeNeuronModal();
+    }
+  }
+
+  function closeNeuronModal() {
+    const modal = document.getElementById("neuron-modal");
+    if (modal) modal.hidden = true;
+    document.removeEventListener("keydown", onNeuronModalKey);
+  }
+
+  function openNeuronModal(idx) {
+    const modal = document.getElementById("neuron-modal");
+    const titleEl = document.getElementById("neuron-modal-title");
+    const bodyEl = document.getElementById("neuron-modal-body");
+    if (!modal || !titleEl || !bodyEl) return;
+    const name = layoutNames && layoutNames[idx];
+    if (!name) return;
+    if (neuralTooltipEl) neuralTooltipEl.style.display = "none";
+
+    titleEl.textContent = name;
+    bodyEl.replaceChildren();
+
+    const intro = document.createElement("p");
+    intro.className = "neuron-modal-intro";
+    intro.textContent =
+      "Cook classification and synaptic degrees come from the connectome used to wire this simulation’s PAULA network. V_m and “fired” are live values from this run.";
+    bodyEl.appendChild(intro);
+
+    const dl = document.createElement("dl");
+    function addRow(dt, ddText) {
+      const dtt = document.createElement("dt");
+      dtt.textContent = dt;
+      const ddd = document.createElement("dd");
+      ddd.textContent = ddText;
+      dl.appendChild(dtt);
+      dl.appendChild(ddd);
+    }
+    addRow("PAULA id", String(idx));
+    const meta = neuronMeta && neuronMeta[idx];
+    if (meta && typeof meta.k === "string") {
+      addRow("Cook class", NEURON_KIND_LABEL[meta.k] || NEURON_KIND_LABEL.u);
+      addRow(
+        "Chemical synapses (in / out)",
+        String(meta.ic) + " / " + String(meta.oc)
+      );
+      addRow("Gap junctions (in / out)", String(meta.ig) + " / " + String(meta.og));
+    } else {
+      addRow("Connectome metadata", "Not in hello (reconnect after server update).");
+    }
+    if (idx < lastNeuralS.length) {
+      addRow("V_m (this tick)", String(lastNeuralS[idx]));
+    }
+    if (idx < lastNeuralF.length) {
+      addRow("Fired (O>0)", lastNeuralF[idx] ? "Yes" : "No");
+    }
+    bodyEl.appendChild(dl);
+
+    const h3 = document.createElement("h3");
+    h3.textContent = "Read more (new tab)";
+    bodyEl.appendChild(h3);
+    const ul = document.createElement("ul");
+    ul.className = "links";
+    appendLinkItem(
+      ul,
+      COOK_2019_URL,
+      "Cook et al. (2019), Nature — hermaphrodite connectome (this wiring’s source)"
+    );
+    appendLinkItem(
+      ul,
+      pubmedNeuronLiteratureUrl(name),
+      "PubMed — search: Caenorhabditis elegans + " + name
+    );
+    appendLinkItem(
+      ul,
+      wormBaseSearchUrl(name),
+      "WormBase — site search for " + name
+    );
+    appendLinkItem(
+      ul,
+      WORMBOOK_NEURO_URL,
+      "WormBook — C. elegans neurobiology overview"
+    );
+    appendLinkItem(
+      ul,
+      WORMWIRING_COOK_URL,
+      "WormWiring — Emmons lab / Cook et al. data portal"
+    );
+    bodyEl.appendChild(ul);
+
+    modal.hidden = false;
+    document.removeEventListener("keydown", onNeuronModalKey);
+    document.addEventListener("keydown", onNeuronModalKey);
+    const closeBtn = modal.querySelector(".neuron-modal-close");
+    if (closeBtn instanceof HTMLElement) closeBtn.focus();
+  }
 
   let fpsAccFrames = 0;
   let fpsAccStart = 0;
@@ -372,6 +511,31 @@
     return best;
   }
 
+  function neuronModalIsOpen() {
+    return Boolean(neuronModalEl && !neuronModalEl.hidden);
+  }
+
+  /** Refresh tooltip text/position from latest S/F (call from rAF and mousemove). */
+  function syncNeuralTooltipFromHover() {
+    if (!neuralTooltipEl || neuronModalIsOpen()) return;
+    const idx = hoverNeuronIdx;
+    if (idx < 0 || !layoutNames || !layoutNames[idx]) {
+      neuralTooltipEl.style.display = "none";
+      return;
+    }
+    let line = layoutNames[idx];
+    if (idx < lastNeuralS.length) {
+      line += " · V_m=" + lastNeuralS[idx];
+    }
+    if (idx < lastNeuralF.length && lastNeuralF[idx]) {
+      line += " · fired";
+    }
+    neuralTooltipEl.textContent = line;
+    neuralTooltipEl.style.display = "block";
+    neuralTooltipEl.style.left = neuralHoverClientX + 12 + "px";
+    neuralTooltipEl.style.top = neuralHoverClientY + 12 + "px";
+  }
+
   function drawNeural() {
     ctxN.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctxN.fillStyle = "#151820";
@@ -545,6 +709,7 @@
       layoutAx = null;
       layoutAy = null;
       layoutNames = null;
+      neuronMeta = null;
       lastNeuralS = [];
       lastNeuralF = [];
       pendingFoodCmd = null;
@@ -569,6 +734,7 @@
             layoutAy = msg.L.ay.map(Number);
             layoutNames = Array.isArray(msg.L.nm) ? msg.L.nm : null;
           }
+          neuronMeta = Array.isArray(msg.M) ? msg.M : null;
         } else if (msg.t === "s") {
           applyStateMsg(msg);
         } else if (msg.t === "u" && typeof msg.n === "number" && onlineEl) {
@@ -587,6 +753,7 @@
     requestAnimationFrame(animFrame);
     draw(now);
     drawNeural();
+    syncNeuralTooltipFromHover();
   }
 
   canvas.addEventListener("mousedown", (e) => {
@@ -647,29 +814,15 @@
   window.addEventListener("resize", resize);
 
   neuralCanvas.addEventListener("mousemove", (e) => {
+    neuralHoverClientX = e.clientX;
+    neuralHoverClientY = e.clientY;
     const rect = neuralCanvas.getBoundingClientRect();
     const mx = ((e.clientX - rect.left) / rect.width) * neuralCssW;
     const my = ((e.clientY - rect.top) / rect.height) * neuralCssH;
     const idx = pickNeuronAtCss(mx, my);
     hoverNeuronIdx = idx;
     neuralCanvas.style.cursor = idx >= 0 ? "pointer" : "default";
-    if (neuralTooltipEl) {
-      if (idx >= 0 && layoutNames && layoutNames[idx]) {
-        let line = layoutNames[idx];
-        if (idx < lastNeuralS.length) {
-          line += " · V_m=" + lastNeuralS[idx];
-        }
-        if (idx < lastNeuralF.length && lastNeuralF[idx]) {
-          line += " · fired";
-        }
-        neuralTooltipEl.textContent = line;
-        neuralTooltipEl.style.display = "block";
-        neuralTooltipEl.style.left = e.clientX + 12 + "px";
-        neuralTooltipEl.style.top = e.clientY + 12 + "px";
-      } else {
-        neuralTooltipEl.style.display = "none";
-      }
-    }
+    syncNeuralTooltipFromHover();
   });
 
   neuralCanvas.addEventListener("mouseleave", () => {
@@ -677,6 +830,30 @@
     neuralCanvas.style.cursor = "default";
     if (neuralTooltipEl) neuralTooltipEl.style.display = "none";
   });
+
+  neuralCanvas.addEventListener("click", (e) => {
+    const rect = neuralCanvas.getBoundingClientRect();
+    const mx = ((e.clientX - rect.left) / rect.width) * neuralCssW;
+    const my = ((e.clientY - rect.top) / rect.height) * neuralCssH;
+    const idx = pickNeuronAtCss(mx, my);
+    if (idx >= 0) {
+      e.preventDefault();
+      openNeuronModal(idx);
+    }
+  });
+
+  const neuronModalRoot = document.getElementById("neuron-modal");
+  if (neuronModalRoot) {
+    neuronModalRoot.addEventListener("click", (e) => {
+      const t = e.target;
+      if (
+        t instanceof HTMLElement &&
+        t.getAttribute("data-close-neuron-modal") === "1"
+      ) {
+        closeNeuronModal();
+      }
+    });
+  }
 
   resize();
   connect();

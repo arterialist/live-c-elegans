@@ -53,6 +53,9 @@ from celegans_live_demo.worm_snapshot import (
 # c  = com_mm — centre of mass [x,y] in mm (client builds trajectory locally)
 # S  = membrane (PAULA S) per paula_id, 4 decimal places; F = 0/1 fired (O>0)
 # Hello optional L = {nm, ax, ay} static layout (Cook order AP + name D/V proxy)
+# Hello optional M = parallel list to nm: {k,ic,ig,oc,og} Cook connectome metadata
+#   k = neuron class: s sensory, m motor, i interneuron, u unknown
+#   ic,ig,oc,og = in/out chemical & gap-junction degree (synapse counts in Cook data)
 # Hello: m = message (human hint)
 # Error: m = message
 # Client add/remove: x, y = position in mm
@@ -66,6 +69,31 @@ MAX_CLIENTS = 50
 # Global command rate (add_food + remove_food) per rolling window
 RATE_WINDOW_S = 5.0
 RATE_MAX_COMMANDS = 60
+
+_NEURON_KIND_WIRE = {"sensory": "s", "motor": "m", "interneuron": "i", "unknown": "u"}
+
+
+def _wire_neuron_meta_list(ns: CElegansNervousSystem) -> list[dict[str, Any]]:
+    """Compact per-neuron facts from :class:`ConnectomeData` (Cook order = PAULA id order)."""
+    names = ns.get_neuron_names_paula_order()
+    nm_to = ns._connectome.name_to_info
+    out: list[dict[str, Any]] = []
+    for name in names:
+        info = nm_to.get(name)
+        if info is None:
+            out.append({"k": "u", "ic": 0, "ig": 0, "oc": 0, "og": 0})
+            continue
+        k = _NEURON_KIND_WIRE.get(info.neuron_type, "u")
+        out.append(
+            {
+                "k": k,
+                "ic": int(info.in_degree_chem),
+                "ig": int(info.in_degree_gap),
+                "oc": int(info.out_degree_chem),
+                "og": int(info.out_degree_gap),
+            }
+        )
+    return out
 
 
 def _stderr_sink_filter(record: Any) -> bool:
@@ -210,11 +238,13 @@ class SimRuntime:
         self._running = threading.Event()
         self._running.set()
         self._neural_static: dict[str, Any] | None = None
+        self._neuron_meta: list[dict[str, Any]] | None = None
         ns0 = self.engine.nervous_system
         if isinstance(ns0, CElegansNervousSystem):
             names = ns0.get_neuron_names_paula_order()
             ax, ay = side_view_layout_normalized(names)
             self._neural_static = {"nm": names, "ax": ax, "ay": ay}
+            self._neuron_meta = _wire_neuron_meta_list(ns0)
 
     def command_queue(self) -> queue.SimpleQueue[dict[str, Any]]:
         return self._cmd_queue
@@ -511,6 +541,8 @@ def main() -> None:
             }
             if rt._neural_static is not None:
                 hello["L"] = rt._neural_static
+            if rt._neuron_meta is not None:
+                hello["M"] = rt._neuron_meta
             await ws.send(json.dumps(hello, separators=(",", ":")))
             await broadcast_online_count()
             async for raw in ws:
