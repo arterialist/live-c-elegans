@@ -10,7 +10,7 @@
  * continuous requestAnimationFrame for FPS display + smooth lerp between sim ticks.
  */
 (function () {
-  const DEFAULT_WS_URL = "ws://127.0.0.1:8765";
+  const DEFAULT_WS_URL = "wss://dane-ready-stag.ngrok-free.app";
   /** Upper cap for zoom (screen pixels per world mm); worm is sub-mm so allow deep zoom */
   const MAX_SCALE_PX_PER_MM = 800;
   const PROTOCOL = 2;
