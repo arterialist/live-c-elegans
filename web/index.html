@@ -4,6 +4,22 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>C. elegans Live Simulation</title>
+
+    <!-- Google tag (gtag.js) -->
+    <script
+      async
+      src="https://www.googletagmanager.com/gtag/js?id=G-S9GY9WBTSV"
+    ></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag() {
+        dataLayer.push(arguments);
+      }
+      gtag("js", new Date());
+
+      gtag("config", "G-S9GY9WBTSV");
+    </script>
+
     <style>
       html,
       body {
@@ -240,10 +256,14 @@
       <span id="controls-hint"
         >Desktop: left add · right remove · <kbd>Shift</kbd>+drag pan · wheel
         zoom · Touch: drag pan · tap add · long-press remove · pinch zoom ·
-        bottom: 302 PAULA — desktop: hover for tooltip · tap for details · touch:
-        tap a cell for details (no hover tooltip)</span
+        bottom: 302 PAULA — desktop: hover for tooltip · tap for details ·
+        touch: tap a cell for details (no hover tooltip)</span
       >
-      <button type="button" id="alerts-toggle" title="Browser notifications + sound for food and viewer join/leave (after permission)">
+      <button
+        type="button"
+        id="alerts-toggle"
+        title="Browser notifications + sound for food and viewer join/leave (after permission)"
+      >
         Alerts: off
       </button>
     </div>
@@ -259,10 +279,21 @@
     </div>
     <div id="toast-stack" aria-live="polite" aria-relevant="additions"></div>
     <div id="neural-tooltip" role="tooltip"></div>
-    <div id="neuron-modal" hidden role="dialog" aria-modal="true" aria-labelledby="neuron-modal-title">
+    <div
+      id="neuron-modal"
+      hidden
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="neuron-modal-title"
+    >
       <div class="neuron-modal-backdrop" data-close-neuron-modal="1"></div>
       <div class="neuron-modal-panel">
-        <button type="button" class="neuron-modal-close" aria-label="Close" data-close-neuron-modal="1">
+        <button
+          type="button"
+          class="neuron-modal-close"
+          aria-label="Close"
+          data-close-neuron-modal="1"
+        >
           &times;
         </button>
         <h2 id="neuron-modal-title"></h2>
