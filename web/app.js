@@ -13,7 +13,7 @@
  * continuous requestAnimationFrame for FPS + TPS display + smooth lerp between sim ticks.
  */
 (function () {
-  const DEFAULT_WS_URL = "wss://dane-ready-stag.ngrok-free.app";
+  const DEFAULT_WS_URL = "wss://desired-lemming-square.ngrok-free.app";
   /** Upper cap for zoom (screen pixels per world mm); worm is sub-mm so allow deep zoom */
   const MAX_SCALE_PX_PER_MM = 800;
   const PROTOCOL = 2;
