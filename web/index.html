@@ -3,6 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- Delegate autoplay/media to embeds (e.g. SoundCloud) when the page is http:// or otherwise not a secure context. -->
+    <meta
+      http-equiv="Permissions-Policy"
+      content="autoplay=*, encrypted-media=*, fullscreen=*"
+    />
     <title>C. elegans Live Simulation</title>
 
     <!-- Google tag (gtag.js) -->
@@ -281,6 +286,16 @@
     </style>
   </head>
   <body>
+    <iframe
+      title="Background audio (SoundCloud)"
+      style="display: none; border: 0"
+      width="1"
+      height="1"
+      scrolling="no"
+      allow="autoplay *; encrypted-media *; fullscreen *"
+      src="https://w.soundcloud.com/player/?url=https%3A//api.soundcloud.com/tracks/soundcloud%253Atracks%253A799921102&color=%23ff5500&auto_play=true&hide_related=false&show_comments=true&show_user=true&show_reposts=false&show_teaser=true&visual=true"
+    ></iframe>
+
     <div id="bar">
       <span id="status">Disconnected</span>
       <span id="online"></span>
@@ -289,7 +304,8 @@
       <span
         id="tps"
         title="Simulation ticks per wall-clock second (from tick advances in the stream)"
-        >— tps</span>
+        >— tps</span
+      >
       <span id="controls-hint"
         >Desktop: left add · right remove · <kbd>Shift</kbd>+drag pan · wheel
         zoom · Touch: drag pan · tap add · long-press remove · pinch zoom ·
@@ -309,25 +325,29 @@
         href="https://github.com/arterialist/neuron-model"
         rel="noopener noreferrer"
         target="_blank"
-        >neuron-model</a>
+        >neuron-model</a
+      >
       <span class="sep" aria-hidden="true">·</span>
       <a
         href="https://github.com/arterialist/active-inference"
         rel="noopener noreferrer"
         target="_blank"
-        >active-inference</a>
+        >active-inference</a
+      >
       <span class="sep" aria-hidden="true">·</span>
       <a
         href="https://github.com/arterialist/live-c-elegans"
         rel="noopener noreferrer"
         target="_blank"
-        >live-c-elegans</a>
+        >live-c-elegans</a
+      >
       <span class="sep" aria-hidden="true">·</span>
       <a
         href="https://al.arteriali.st"
         rel="noopener noreferrer"
         target="_blank"
-        >Research at al.arteriali.st</a>
+        >Research at al.arteriali.st</a
+      >
     </nav>
     <div id="main-split">
       <div id="worm-panel">
@@ -362,15 +382,14 @@
         <div id="neuron-modal-body"></div>
       </div>
     </div>
-    <!-- Background loop; disable with ?nobg=1 or ?bg=0 (autoplay needs a gesture on most browsers). -->
-    <audio
+    <!-- Background loop: `src` wired in app.js after first frames so load/decode does not block startup. ?nobg=1 or ?bg=0 disables. -->
+    <!-- <audio
       id="bg-audio"
-      src="bg.m4a"
+      preload="none"
       loop
-      preload="auto"
       playsinline
       aria-hidden="true"
-    ></audio>
+    ></audio> -->
     <script src="app.js"></script>
   </body>
 </html>

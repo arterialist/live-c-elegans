@@ -1,10 +1,12 @@
 /**
  * C. elegans live viewer — WebSocket + canvas (pan/zoom, worm spine + parts).
- * Protocol v2: short JSON keys (see README). Trajectory from `c`; hello `L` (layout);
+ * Protocol v2: short JSON keys (see README).
+ * Trajectory from `c`; hello `L` (layout);
  * each state may include `S` (V_m, 4 decimals), `F` (fired 0/1), and `R` (threshold r, 4 decimals).
  * Food UX: separate frames `fa` / `fr` / `fe` with `n` = count (viewer commands vs worm eaten).
  * Presence `t:"u"` with `n` = concurrent viewer count; client toasts join/leave from deltas.
- * Optional `bg.m4a` loops after load; `?nobg=1` or `?bg=0` skips; first pointer/key may be required for play().
+ * Optional `bg.m4a` loops (lazy `src`, deferred play, `preload="none"`); `?nobg=1` / `?bg=0` skips.
+ * Toast chimes reuse one `AudioContext` instead of constructing per beep.
  * Hello `M` = connectome metadata per neuron (parallel to `L.nm`).
  *
  * Rendering: CSS-pixel space + DPR bitmap; world→view via one canvas transform;
@@ -145,6 +147,9 @@
       Notification.permission === "granted"
     );
   }
+
+  /** One Web Audio context for toast chimes (a new context per toast is costly). */
+  let toastAudioCtx = null;
 
   const neuralTooltipEl = document.getElementById("neural-tooltip");
   const neuronModalEl = document.getElementById("neuron-modal");
@@ -649,7 +654,9 @@
     try {
       const Ctx = window.AudioContext || window.webkitAudioContext;
       if (!Ctx) return;
-      const ctx = new Ctx();
+      if (!toastAudioCtx) toastAudioCtx = new Ctx();
+      const ctx = toastAudioCtx;
+      void ctx.resume().catch(function () {});
       const o = ctx.createOscillator();
       const g = ctx.createGain();
       o.type = "sine";
@@ -659,7 +666,6 @@
       g.connect(ctx.destination);
       o.start();
       o.stop(ctx.currentTime + dur);
-      ctx.resume().catch(function () {});
     } catch (_) {}
   }
 
@@ -1384,19 +1390,30 @@
     if (!a || !(a instanceof HTMLAudioElement)) return;
     a.volume = 0.32;
 
-    const tryStart = () => {
-      void a.play().catch(() => {});
-    };
+    let srcWired = false;
 
-    const onPlaying = () => {
+    const detach = () => {
       window.removeEventListener("pointerdown", tryStart);
       window.removeEventListener("keydown", tryStart);
     };
 
-    a.addEventListener("playing", onPlaying, { once: true });
-    tryStart();
+    const tryStart = () => {
+      if (!srcWired) {
+        a.src = "bg.m4a";
+        srcWired = true;
+      }
+      if (!a.paused) {
+        detach();
+        return;
+      }
+      void a.play().then(detach).catch(() => {});
+    };
+
     window.addEventListener("pointerdown", tryStart, { passive: true });
-    window.addEventListener("keydown", tryStart);
+    window.addEventListener("keydown", tryStart, { passive: true });
+    requestAnimationFrame(() => {
+      requestAnimationFrame(tryStart);
+    });
   })();
 
   resize();
