@@ -20,6 +20,7 @@ from typing import Any
 
 import numpy as np
 from websockets.asyncio.server import ServerConnection, serve
+from websockets.datastructures import Headers
 from loguru import logger
 
 from simulations.c_elegans.body import CElegansBody
@@ -152,6 +153,70 @@ def _ws_peer(ws: ServerConnection) -> str:
         return "?"
 
 
+def _headers_first_line(headers: Headers, name: str) -> str | None:
+    """First header line for ``name`` (case-insensitive), stripped, or None."""
+    vals = headers.get_all(name)
+    if not vals:
+        return None
+    v = vals[0].strip()
+    return v or None
+
+
+def _xff_leftmost_host(value: str) -> str | None:
+    """Leftmost host in an ``X-Forwarded-For`` chain (first client hop)."""
+    first = value.split(",")[0].strip()
+    if not first:
+        return None
+    if len(first) >= 2 and first[0] == '"' and first[-1] == '"':
+        first = first[1:-1].strip()
+    if first.startswith("["):
+        end = first.find("]")
+        if end != -1:
+            inner = first[1:end].strip()
+            return inner or None
+    # Possible "IPv4:port" (uncommon in XFF)
+    if first.count(":") == 1 and "." in first:
+        host, _, maybe_port = first.rpartition(":")
+        if maybe_port.isdigit():
+            return host
+    return first
+
+
+def _forwarded_client_ip(headers: Headers) -> tuple[str | None, str | None]:
+    """Best-effort original client IP from proxy headers.
+
+    Returns ``(ip, header_name)`` when a trusted-style header is present;
+    otherwise ``(None, None)``. Precedence: CF-Connecting-IP, True-Client-IP,
+    X-Real-IP, then leftmost hop of X-Forwarded-For.
+    """
+    for hdr in ("CF-Connecting-IP", "True-Client-IP", "X-Real-IP"):
+        raw = _headers_first_line(headers, hdr)
+        if not raw:
+            continue
+        ip = raw.split(",")[0].strip()
+        if ip:
+            return ip, hdr
+    xff = _headers_first_line(headers, "X-Forwarded-For")
+    if xff:
+        ip = _xff_leftmost_host(xff)
+        if ip:
+            return ip, "X-Forwarded-For"
+    return None, None
+
+
+def _client_log_label(ws: ServerConnection) -> str:
+    """Stable id + effective client IP (from forward headers when present) + TCP peer."""
+    remote = _ws_peer(ws)
+    cid = str(ws.id)
+    req = ws.request
+    if req is None:
+        return f"{cid} (remote {remote})"
+    fwd_ip, via = _forwarded_client_ip(req.headers)
+    if fwd_ip and via:
+        return f"{cid} client_ip={fwd_ip} (via {via}; remote {remote})"
+    return f"{cid} (remote {remote})"
+
+
 def _plate_radius_mm() -> float:
     return float(ENV_PLATE_RADIUS_M * 1000.0)
 
@@ -273,6 +338,7 @@ class SimRuntime:
             except queue.Empty:
                 break
             ctype = cmd.get("type")
+            client = str(cmd.get("client") or "unknown")
             if ctype == "add_food":
                 x_mm = float(cmd["x_mm"])
                 y_mm = float(cmd["y_mm"])
@@ -281,28 +347,40 @@ class SimRuntime:
                     env.add_food((float(pos_m[0]), float(pos_m[1]), float(pos_m[2])))
                     self._food_cmd_add += 1
                     logger.info(
-                        "Food added at ({:.3f}, {:.3f}) mm ({} pellets)",
+                        "Food added by {} at ({:.3f}, {:.3f}) mm ({} pellets)",
+                        client,
                         x_mm,
                         y_mm,
                         len(env.get_active_food_positions()),
                     )
                 else:
                     logger.info(
-                        "Food add rejected (off plate) at ({:.3f}, {:.3f}) mm",
+                        "Food add rejected (off plate) by {} at ({:.3f}, {:.3f}) mm",
+                        client,
                         x_mm,
                         y_mm,
                     )
             elif ctype == "remove_food":
                 x_mm = float(cmd["x_mm"])
                 y_mm = float(cmd["y_mm"])
-                if env.remove_food_near((x_mm / 1000.0, y_mm / 1000.0, 0.0)):
+                removed = env.remove_food_near((x_mm / 1000.0, y_mm / 1000.0, 0.0))
+                if removed:
                     self._food_cmd_remove += 1
-                logger.info(
-                    "Food remove near ({:.3f}, {:.3f}) mm ({} pellets)",
-                    x_mm,
-                    y_mm,
-                    len(env.get_active_food_positions()),
-                )
+                    logger.info(
+                        "Food removed by {} near ({:.3f}, {:.3f}) mm ({} pellets)",
+                        client,
+                        x_mm,
+                        y_mm,
+                        len(env.get_active_food_positions()),
+                    )
+                else:
+                    logger.info(
+                        "Food remove by {} near ({:.3f}, {:.3f}) mm — no pellet in range ({} pellets)",
+                        client,
+                        x_mm,
+                        y_mm,
+                        len(env.get_active_food_positions()),
+                    )
 
     def _build_snapshot(self) -> dict[str, Any]:
         env0 = self.engine.environment
@@ -369,6 +447,12 @@ class SimRuntime:
                 self._drain_commands()
                 snap = self._build_snapshot()
                 fr, fe, fa = self._food_evt_triplet_this_tick()
+                if fe:
+                    logger.info(
+                        "Worm ate {} pellet(s) (tick {})",
+                        fe,
+                        snap.get("k"),
+                    )
                 with self._snapshot_lock:
                     self._latest = snap
                     self._food_evt_accum_fr += fr
@@ -558,7 +642,7 @@ def main() -> None:
                     logger.debug(
                         "Presence send skipped (timeout {:.0f} ms) for {}",
                         broadcast_send_timeout_s * 1000,
-                        _ws_peer(c),
+                        _client_log_label(c),
                     )
                 except Exception:
                     dead.append(c)
@@ -576,24 +660,26 @@ def main() -> None:
             return True
 
     async def unregister(ws: ServerConnection) -> None:
-        peer = _ws_peer(ws)
+        client = _client_log_label(ws)
         async with clients_lock:
             clients.discard(ws)
             n = len(clients)
-        logger.info("WebSocket disconnected {} ({} clients remain)", peer, n)
+        logger.info("Client disconnected: {} ({} clients remain)", client, n)
         await broadcast_online_count()
 
     async def handler(ws: ServerConnection) -> None:
-        peer = _ws_peer(ws)
         if not await register(ws):
             logger.warning(
-                "WebSocket rejected {} (server full, max {})", peer, MAX_CLIENTS
+                "Client connection rejected (server full, max {}): {}",
+                MAX_CLIENTS,
+                _client_log_label(ws),
             )
             await ws.close(1013, "Server full")
             return
+        client = _client_log_label(ws)
         async with clients_lock:
             n = len(clients)
-        logger.info("WebSocket connected {} ({} clients)", peer, n)
+        logger.info("Client connected: {} ({} clients)", client, n)
         try:
             hello: dict[str, Any] = {
                 "p": PROTOCOL_VERSION,
@@ -610,7 +696,7 @@ def main() -> None:
                 try:
                     msg = json.loads(raw)
                 except json.JSONDecodeError:
-                    logger.warning("Invalid JSON from {} ({} bytes)", peer, len(raw))
+                    logger.warning("Invalid JSON from {} ({} bytes)", client, len(raw))
                     await ws.send(
                         json.dumps(
                             {"p": PROTOCOL_VERSION, "t": "e", "m": "invalid JSON"}
@@ -620,7 +706,7 @@ def main() -> None:
                 if msg.get("p") != PROTOCOL_VERSION:
                     logger.warning(
                         "Unsupported protocol from {}: got p={!r}",
-                        peer,
+                        client,
                         msg.get("p"),
                     )
                     await ws.send(
@@ -635,7 +721,7 @@ def main() -> None:
                     continue
                 mtype = msg.get("t")
                 if mtype == "i":
-                    logger.debug("Ping from {}", peer)
+                    logger.debug("Ping from {}", client)
                     await ws.send(json.dumps({"p": PROTOCOL_VERSION, "t": "o"}))
                     continue
                 if mtype == "a":
@@ -643,7 +729,7 @@ def main() -> None:
                 elif mtype == "v":
                     cmd_name = "remove_food"
                 else:
-                    logger.warning("Unknown message type from {}: {!r}", peer, mtype)
+                    logger.warning("Unknown message type from {}: {!r}", client, mtype)
                     await ws.send(
                         json.dumps(
                             {
@@ -658,7 +744,7 @@ def main() -> None:
                     if not cmd_limiter.allow():
                         logger.warning(
                             "Food command rate limited for {} (max {} per {:.0f}s)",
-                            peer,
+                            client,
                             RATE_MAX_COMMANDS,
                             RATE_WINDOW_S,
                         )
@@ -676,12 +762,13 @@ def main() -> None:
                                 "type": cmd_name,
                                 "x_mm": x_mm,
                                 "y_mm": y_mm,
+                                "client": client,
                             }
                         )
                     except (KeyError, TypeError, ValueError):
                         logger.warning(
                             "Malformed food command from {} (expected x,y): {!r}",
-                            peer,
+                            client,
                             msg,
                         )
                         await ws.send(
@@ -731,12 +818,12 @@ def main() -> None:
                     logger.debug(
                         "Broadcast send skipped (timeout {:.0f} ms) for {}",
                         broadcast_send_timeout_s * 1000,
-                        _ws_peer(c),
+                        _client_log_label(c),
                     )
                 except Exception as exc:
                     logger.warning(
                         "Broadcast send failed for {}: {}: {}",
-                        _ws_peer(c),
+                        _client_log_label(c),
                         type(exc).__name__,
                         exc,
                     )
