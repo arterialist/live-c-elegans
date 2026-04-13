@@ -7,7 +7,7 @@
  * Hello `M` = connectome metadata per neuron (parallel to `L.nm`).
  *
  * Rendering: CSS-pixel space + DPR bitmap; world→view via one canvas transform;
- * continuous requestAnimationFrame for FPS display + smooth lerp between sim ticks.
+ * continuous requestAnimationFrame for FPS + TPS display + smooth lerp between sim ticks.
  */
 (function () {
   const DEFAULT_WS_URL = "wss://dane-ready-stag.ngrok-free.app";
@@ -48,6 +48,7 @@
   const onlineEl = document.getElementById("online");
   const tickEl = document.getElementById("tick");
   const fpsEl = document.getElementById("fps");
+  const tpsEl = document.getElementById("tps");
 
   /** Last `t:"u"` count; `-1` until first presence after connect (no join spam on first packet). */
   let lastPresenceN = -1;
@@ -302,6 +303,10 @@
 
   let fpsAccFrames = 0;
   let fpsAccStart = 0;
+  /** Sum of Δtick since last HUD refresh (same window as FPS). */
+  let tpsAccTicks = 0;
+  /** Last state message `k` for TPS; `-1` until first packet after connect. */
+  let tpsPrevK = -1;
 
   function smoothstep01(t) {
     const u = Math.min(1, Math.max(0, t));
@@ -480,8 +485,18 @@
     if (!fpsAccStart) fpsAccStart = now;
     fpsAccFrames++;
     if (now - fpsAccStart >= 500) {
-      const fps = (fpsAccFrames * 1000) / (now - fpsAccStart);
+      const elapsed = now - fpsAccStart;
+      const fps = (fpsAccFrames * 1000) / elapsed;
       fpsEl.textContent = Math.round(fps) + " fps";
+      if (tpsEl) {
+        if (tpsPrevK < 0 || elapsed <= 0) {
+          tpsEl.textContent = "— tps";
+        } else {
+          const tps = (tpsAccTicks * 1000) / elapsed;
+          tpsEl.textContent = Math.round(tps) + " tps";
+        }
+        tpsAccTicks = 0;
+      }
       fpsAccFrames = 0;
       fpsAccStart = now;
     }
@@ -934,6 +949,13 @@
       trajectoryMm.push([Number(msg.c[0]), Number(msg.c[1])]);
       while (trajectoryMm.length > TRAJECTORY_MAX) trajectoryMm.shift();
     }
+    const k = Number(msg.k);
+    if (Number.isFinite(k)) {
+      if (tpsPrevK >= 0 && k > tpsPrevK) {
+        tpsAccTicks += k - tpsPrevK;
+      }
+      tpsPrevK = k;
+    }
     tickEl.textContent = "tick " + msg.k;
     if (!viewFitted && msg.r) {
       scale = (Math.min(wormCssW, wormCssH) / (2 * msg.r)) * 0.88;
@@ -977,6 +999,9 @@
       lastNeuralF = [];
       lastNeuralR = [];
       lastPresenceN = -1;
+      tpsPrevK = -1;
+      tpsAccTicks = 0;
+      if (tpsEl) tpsEl.textContent = "— tps";
       syncAlertsToggleLabel();
     };
     ws.onclose = () => {
