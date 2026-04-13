@@ -4,6 +4,7 @@
  * each state may include `S` (V_m, 4 decimals), `F` (fired 0/1), and `R` (threshold r, 4 decimals).
  * Food UX: separate frames `fa` / `fr` / `fe` with `n` = count (viewer commands vs worm eaten).
  * Presence `t:"u"` with `n` = concurrent viewer count; client toasts join/leave from deltas.
+ * Optional `bg.m4a` loops after load; `?nobg=1` or `?bg=0` skips; first pointer/key may be required for play().
  * Hello `M` = connectome metadata per neuron (parallel to `L.nm`).
  *
  * Rendering: CSS-pixel space + DPR bitmap; world→view via one canvas transform;
@@ -35,6 +36,8 @@
 
   const params = new URLSearchParams(window.location.search);
   const WS_URL = params.get("ws") || DEFAULT_WS_URL;
+  const NO_BG_MUSIC =
+    params.get("nobg") === "1" || params.get("bg") === "0";
 
   const canvas = document.getElementById("c");
   const ctx =
@@ -1374,6 +1377,27 @@
     });
   }
   syncAlertsToggleLabel();
+
+  (function initBackgroundMusic() {
+    if (NO_BG_MUSIC) return;
+    const a = document.getElementById("bg-audio");
+    if (!a || !(a instanceof HTMLAudioElement)) return;
+    a.volume = 0.32;
+
+    const tryStart = () => {
+      void a.play().catch(() => {});
+    };
+
+    const onPlaying = () => {
+      window.removeEventListener("pointerdown", tryStart);
+      window.removeEventListener("keydown", tryStart);
+    };
+
+    a.addEventListener("playing", onPlaying, { once: true });
+    tryStart();
+    window.addEventListener("pointerdown", tryStart, { passive: true });
+    window.addEventListener("keydown", tryStart);
+  })();
 
   resize();
   connect();
