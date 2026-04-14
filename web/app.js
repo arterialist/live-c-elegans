@@ -10,9 +10,22 @@
  * Hello `M` = connectome metadata per neuron (parallel to `L.nm`).
  *
  * Rendering: CSS-pixel space + DPR bitmap; world→view via one canvas transform;
- * continuous requestAnimationFrame for FPS + TPS display + smooth lerp between sim ticks.
+ * continuous requestAnimationFrame for FPS + TPS + sim s/s (TPS×dt) + smooth lerp between sim ticks.
  */
 (function () {
+  /**
+   * Model seconds advanced per simulation tick (one MuJoCo mj_step per engine step).
+   * Must match `active-inference/simulations/c_elegans/body_model.xml` `<option timestep="…">`.
+   */
+  const SIM_SECONDS_PER_TICK = 0.002;
+
+  /** Model seconds per wall second from stream TPS (unrounded). */
+  function formatSimSecondsPerWallSecond(tps) {
+    const x = Number(tps) * SIM_SECONDS_PER_TICK;
+    if (!Number.isFinite(x) || x < 0) return "—";
+    return x.toFixed(4);
+  }
+
   const DEFAULT_WS_URL = "wss://desired-lemming-square.ngrok-free.app";
   /** Upper cap for zoom (screen pixels per world mm); worm is sub-mm so allow deep zoom */
   const MAX_SCALE_PX_PER_MM = 800;
@@ -51,9 +64,17 @@
     neuralCanvas.getContext("2d");
   const statusEl = document.getElementById("status");
   const onlineEl = document.getElementById("online");
-  const tickEl = document.getElementById("tick");
+  const tickHudEl = document.getElementById("tick-hud");
+  const simTimeHudEl = document.getElementById("sim-time-hud");
   const fpsEl = document.getElementById("fps");
   const tpsEl = document.getElementById("tps");
+  const simSpsEl = document.getElementById("sim-sps-hud");
+  const barHintRow = document.getElementById("bar-hint-row");
+  const controlsHint = document.getElementById("controls-hint");
+  const hintDialog = document.getElementById("hint-dialog");
+  const hintDialogHost = document.getElementById("hint-dialog-host");
+  const hintOpenBtn = document.getElementById("bar-hint-open");
+  const hintCloseBtn = document.getElementById("hint-dialog-close");
 
   /** Last `t:"u"` count; `-1` until first presence after connect (no join spam on first packet). */
   let lastPresenceN = -1;
@@ -153,6 +174,143 @@
 
   const neuralTooltipEl = document.getElementById("neural-tooltip");
   const neuronModalEl = document.getElementById("neuron-modal");
+
+  const MS_PER_DAY = 86400000;
+  /** ~30 days: switch to date-first formatting (calendar scale). */
+  const MS_PER_APPROX_MONTH = 30 * MS_PER_DAY;
+
+  /**
+   * tick × dt as ms since Unix epoch; formatted in a fixed offset (UTC) so all viewers see the same clock.
+   * Under 1 day: time-of-day only. One day to ~30 days: date + time + ms.
+   * From ~30 days: long calendar date + medium time (no fractional seconds).
+   */
+  function formatSimulationTime(tickNum) {
+    const ms = tickNum * SIM_SECONDS_PER_TICK * 1000;
+    if (!Number.isFinite(ms) || ms < 0) return "—";
+    const d = new Date(ms);
+    const tz = { timeZone: "UTC" };
+    const h23 = { hourCycle: "h23" };
+
+    if (ms < MS_PER_DAY) {
+      try {
+        return (
+          new Intl.DateTimeFormat(undefined, {
+            ...tz,
+            ...h23,
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+            fractionalSecondDigits: 3,
+          }).format(d)
+        );
+      } catch (_) {
+        const hh = String(d.getUTCHours()).padStart(2, "0");
+        const mm = String(d.getUTCMinutes()).padStart(2, "0");
+        const ss = String(d.getUTCSeconds()).padStart(2, "0");
+        const fff = String(d.getUTCMilliseconds()).padStart(3, "0");
+        return `${hh}:${mm}:${ss}.${fff}`;
+      }
+    }
+
+    if (ms < MS_PER_APPROX_MONTH) {
+      const opts = {
+        ...tz,
+        ...h23,
+        weekday: "short",
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      };
+      try {
+        return (
+          new Intl.DateTimeFormat(undefined, {
+            ...opts,
+            fractionalSecondDigits: 3,
+          }).format(d)
+        );
+      } catch (_) {
+        const base = new Intl.DateTimeFormat(undefined, opts).format(d);
+        const frac = String(d.getUTCMilliseconds()).padStart(3, "0");
+        return `${base}.${frac}`;
+      }
+    }
+
+    try {
+      return (
+        new Intl.DateTimeFormat(undefined, {
+          ...tz,
+          dateStyle: "long",
+          timeStyle: "medium",
+        }).format(d)
+      );
+    } catch (_) {
+      const y = d.getUTCFullYear();
+      const mo = d.getUTCMonth() + 1;
+      const da = d.getUTCDate();
+      const hh = String(d.getUTCHours()).padStart(2, "0");
+      const mm = String(d.getUTCMinutes()).padStart(2, "0");
+      const ss = String(d.getUTCSeconds()).padStart(2, "0");
+      return `${y}-${String(mo).padStart(2, "0")}-${String(da).padStart(2, "0")} ${hh}:${mm}:${ss}`;
+    }
+  }
+
+  function setHudTickSimFromK(k) {
+    if (!tickHudEl || !simTimeHudEl) return;
+    const tickNum = Number(k);
+    if (!Number.isFinite(tickNum) || tickNum < 0) {
+      tickHudEl.textContent = "—";
+      simTimeHudEl.textContent = "—";
+      simTimeHudEl.removeAttribute("title");
+      return;
+    }
+    tickHudEl.textContent = String(Math.trunc(tickNum));
+    simTimeHudEl.textContent = formatSimulationTime(tickNum);
+    const ms = tickNum * SIM_SECONDS_PER_TICK * 1000;
+    simTimeHudEl.title =
+      "Model time = tick × " +
+      SIM_SECONDS_PER_TICK +
+      " s from simulation epoch";
+  }
+
+  function reparentControlsHintToBar() {
+    if (barHintRow && controlsHint && !barHintRow.contains(controlsHint)) {
+      barHintRow.appendChild(controlsHint);
+    }
+  }
+
+  function setupHintDialog() {
+    if (
+      !hintDialog ||
+      !hintDialogHost ||
+      !hintOpenBtn ||
+      !hintCloseBtn ||
+      !barHintRow ||
+      !controlsHint
+    ) {
+      return;
+    }
+    hintOpenBtn.addEventListener("click", () => {
+      if (hintDialog.open) return;
+      hintDialogHost.appendChild(controlsHint);
+      hintDialog.showModal();
+      hintCloseBtn.focus();
+    });
+    hintCloseBtn.addEventListener("click", () => {
+      hintDialog.close();
+    });
+    hintDialog.addEventListener("close", reparentControlsHintToBar);
+    window.addEventListener("resize", () => {
+      if (window.matchMedia("(min-width: 721px)").matches) {
+        if (hintDialog.open) hintDialog.close();
+        reparentControlsHintToBar();
+      }
+    });
+  }
+
+  setupHintDialog();
 
   const NEURON_KIND_LABEL = {
     s: "Sensory",
@@ -495,13 +653,15 @@
     if (now - fpsAccStart >= 500) {
       const elapsed = now - fpsAccStart;
       const fps = (fpsAccFrames * 1000) / elapsed;
-      fpsEl.textContent = Math.round(fps) + " fps";
+      fpsEl.textContent = String(Math.round(fps));
       if (tpsEl) {
         if (tpsPrevK < 0 || elapsed <= 0) {
-          tpsEl.textContent = "— tps";
+          tpsEl.textContent = "—";
+          if (simSpsEl) simSpsEl.textContent = "—";
         } else {
           const tps = (tpsAccTicks * 1000) / elapsed;
-          tpsEl.textContent = Math.round(tps) + " tps";
+          tpsEl.textContent = String(Math.round(tps));
+          if (simSpsEl) simSpsEl.textContent = formatSimSecondsPerWallSecond(tps);
         }
         tpsAccTicks = 0;
       }
@@ -965,7 +1125,7 @@
       }
       tpsPrevK = k;
     }
-    tickEl.textContent = "tick " + msg.k;
+    setHudTickSimFromK(msg.k);
     if (!viewFitted && msg.r) {
       scale = (Math.min(wormCssW, wormCssH) / (2 * msg.r)) * 0.88;
       cx = 0;
@@ -1010,13 +1170,18 @@
       lastPresenceN = -1;
       tpsPrevK = -1;
       tpsAccTicks = 0;
-      if (tpsEl) tpsEl.textContent = "— tps";
+      if (tpsEl) tpsEl.textContent = "—";
+      if (simSpsEl) simSpsEl.textContent = "—";
+      setHudTickSimFromK(-1);
       syncAlertsToggleLabel();
     };
     ws.onclose = () => {
       statusEl.textContent = "Disconnected (retry in 3s)";
       statusEl.className = "err";
       if (onlineEl) onlineEl.textContent = "— online";
+      setHudTickSimFromK(-1);
+      if (tpsEl) tpsEl.textContent = "—";
+      if (simSpsEl) simSpsEl.textContent = "—";
       setTimeout(connect, 3000);
     };
     ws.onerror = () => {
