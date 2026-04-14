@@ -11,6 +11,10 @@
  *
  * Rendering: CSS-pixel space + DPR bitmap; world→view via one canvas transform;
  * continuous requestAnimationFrame for FPS + TPS + sim s/s (TPS×dt) + smooth lerp between sim ticks.
+ * Worm canvas: bottom-left scale bar ≈ physical 1 cm ↔ model mm.
+ * Uses visualViewport.scale, devicePixelRatio, Firefox screen.mozMillimetersPerScreenPixel when present,
+ * Windows screen.deviceXDPI when present; else CSS reference (96px/in). Calibrate: ruler-measure the bar’s
+ * layout width in px for 1 real cm, then localStorage.setItem("celegans_physical_css_px_per_cm", value) or ?px_per_cm=.
  */
 (function () {
   /**
@@ -19,11 +23,146 @@
    */
   const SIM_SECONDS_PER_TICK = 0.002;
 
+  const params = new URLSearchParams(window.location.search);
+  /** Optional: layout CSS px that equal one real centimeter with a ruler (overrides auto density). */
+  const URL_PX_PER_CM = (() => {
+    const raw = params.get("px_per_cm");
+    if (raw == null || raw === "") return NaN;
+    const v = parseFloat(raw);
+    return v > 5 && v < 400 ? v : NaN;
+  })();
+
   /** Model seconds per wall second from stream TPS (unrounded). */
   function formatSimSecondsPerWallSecond(tps) {
     const x = Number(tps) * SIM_SECONDS_PER_TICK;
     if (!Number.isFinite(x) || x < 0) return "—";
     return x.toFixed(4);
+  }
+
+  /** Layout CSS px per real-world centimeter; 0 = uncached. */
+  let cssPxPerCmCache = 0;
+
+  const LS_PX_PER_CM = "celegans_physical_css_px_per_cm";
+
+  function invalidatePhysicalCmCache() {
+    cssPxPerCmCache = 0;
+  }
+
+  function visualViewportScale() {
+    const vv = window.visualViewport;
+    if (vv && typeof vv.scale === "number" && vv.scale > 0.05 && vv.scale < 100) {
+      return vv.scale;
+    }
+    return 1;
+  }
+
+  /**
+   * Layout CSS pixels that span one physical centimeter on this display (best effort).
+   * Combines devicePixelRatio, visualViewport pinch zoom, and OS-reported DPI when exposed.
+   */
+  function computeCssPixelsPerPhysicalCm() {
+    const vvScale = visualViewportScale();
+    const dpr = window.devicePixelRatio || 1;
+
+    if (Number.isFinite(URL_PX_PER_CM)) {
+      return URL_PX_PER_CM / vvScale;
+    }
+    try {
+      const s = localStorage.getItem(LS_PX_PER_CM);
+      if (s) {
+        const v = parseFloat(s);
+        if (v > 5 && v < 400) return v / vvScale;
+      }
+    } catch (_) {}
+
+    const scr = window.screen;
+    const mmpp = scr && scr.mozMillimetersPerScreenPixel;
+    if (typeof mmpp === "number" && mmpp > 0.02 && mmpp < 3) {
+      return 10 / mmpp / vvScale;
+    }
+
+    if (
+      scr &&
+      typeof scr.deviceXDPI === "number" &&
+      scr.deviceXDPI >= 48 &&
+      scr.deviceXDPI < 1200
+    ) {
+      return (2.54 * scr.deviceXDPI) / dpr / vvScale;
+    }
+
+    return (96 / 2.54) / vvScale;
+  }
+
+  function getCssPixelsPerCm() {
+    if (cssPxPerCmCache > 0) return cssPxPerCmCache;
+    cssPxPerCmCache = computeCssPixelsPerPhysicalCm();
+    if (!(cssPxPerCmCache > 0)) cssPxPerCmCache = 96 / 2.54;
+    return cssPxPerCmCache;
+  }
+
+  function formatMmPerScreenCm(mm) {
+    if (!Number.isFinite(mm) || mm <= 0) return "—";
+    if (mm >= 100) return mm.toFixed(1);
+    if (mm >= 10) return mm.toFixed(2);
+    if (mm >= 1) return mm.toFixed(2);
+    return mm.toFixed(3);
+  }
+
+  /**
+   * Map-style scale: horizontal bar ≈ physical 1 cm when it fits; label = model mm per that span.
+   * If the panel is narrower than one physical cm in layout px, the bar is shortened; label still states mm / 1 cm.
+   * Draw in worm panel CSS pixel space (current ctx transform should be dpr, origin top-left).
+   */
+  function drawScreenCmScale(ctx2d) {
+    const cmPx = getCssPixelsPerCm();
+    if (!cmPx || !wormCssW || !wormCssH) return;
+    const mmPerScreenCm = cmPx / scale;
+    const padL = 12;
+    const padB = 10;
+    const barH = 5;
+    const tickUp = 7;
+    const textAbove = 5;
+    const barW = Math.min(cmPx, wormCssW - padL * 2);
+    if (barW < 24) return;
+    const x0 = padL;
+    const yBarBot = wormCssH - padB;
+    const yBarTop = yBarBot - barH;
+    const yTickTop = yBarTop - tickUp;
+    const fullCmBar = barW >= cmPx - 0.5;
+    const label = fullCmBar
+      ? "≈ " + formatMmPerScreenCm(mmPerScreenCm) + " mm model / 1 cm"
+      : "≈ " +
+          formatMmPerScreenCm(barW / scale) +
+          " mm on bar · " +
+          formatMmPerScreenCm(mmPerScreenCm) +
+          " mm / 1 cm";
+
+    ctx2d.save();
+    ctx2d.strokeStyle = "#e8eaef";
+    ctx2d.lineWidth = 1.25;
+    ctx2d.beginPath();
+    ctx2d.moveTo(x0, yBarBot);
+    ctx2d.lineTo(x0, yTickTop);
+    ctx2d.moveTo(x0 + barW, yBarBot);
+    ctx2d.lineTo(x0 + barW, yTickTop);
+    ctx2d.stroke();
+
+    ctx2d.fillStyle = "rgba(232, 234, 239, 0.96)";
+    ctx2d.fillRect(x0, yBarTop, barW, barH);
+    ctx2d.strokeStyle = "#4a5568";
+    ctx2d.lineWidth = 1;
+    ctx2d.strokeRect(x0 + 0.5, yBarTop + 0.5, barW - 1, barH - 1);
+
+    ctx2d.fillStyle = "#dfe4ee";
+    ctx2d.shadowColor = "rgba(0,0,0,0.75)";
+    ctx2d.shadowBlur = 4;
+    ctx2d.shadowOffsetX = 0;
+    ctx2d.shadowOffsetY = 1;
+    ctx2d.font = "11px ui-monospace, Menlo, Consolas, monospace";
+    ctx2d.textAlign = "left";
+    ctx2d.textBaseline = "bottom";
+    ctx2d.fillText(label, x0, yTickTop - textAbove);
+    ctx2d.restore();
   }
 
   const DEFAULT_WS_URL = "wss://desired-lemming-square.ngrok-free.app";
@@ -49,7 +188,6 @@
   /** Pinch: ignore smaller finger separation (CSS px) to avoid unstable zoom. */
   const PINCH_MIN_DIST_PX = 12;
 
-  const params = new URLSearchParams(window.location.search);
   const WS_URL = params.get("ws") || DEFAULT_WS_URL;
   const NO_BG_MUSIC =
     params.get("nobg") === "1" || params.get("bg") === "0";
@@ -571,6 +709,7 @@
     neuralCanvas.height = Math.floor(neuralCssH * dpr);
     neuralCanvas.style.width = neuralCssW + "px";
     neuralCanvas.style.height = neuralCssH + "px";
+    invalidatePhysicalCmCache();
   }
 
   function screenToWorld(sx, sy) {
@@ -679,6 +818,7 @@
       ctx.fillStyle = "#888";
       ctx.font = "14px system-ui";
       ctx.fillText("Waiting for simulation…", 16, 28);
+      drawScreenCmScale(ctx);
       return;
     }
 
@@ -768,6 +908,7 @@
     }
 
     ctx.restore();
+    drawScreenCmScale(ctx);
   }
 
   /** Matches `connectome_layout._dv_offset` range for normalized y mapping. */
@@ -1427,6 +1568,16 @@
   });
 
   window.addEventListener("resize", resize);
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener(
+      "resize",
+      invalidatePhysicalCmCache
+    );
+    window.visualViewport.addEventListener(
+      "scroll",
+      invalidatePhysicalCmCache
+    );
+  }
 
   function neuralPointerMove(e) {
     neuralHoverClientX = e.clientX;
