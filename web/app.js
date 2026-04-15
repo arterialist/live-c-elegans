@@ -1,8 +1,7 @@
 /**
  * C. elegans live viewer — WebSocket + canvas (pan/zoom, worm spine + parts).
- * Protocol v2: short JSON keys (see README).
- * Trajectory from `c`; hello `L` (layout);
- * each state may include `S` (V_m, 4 decimals), `F` (fired 0/1), and `R` (threshold r, 4 decimals).
+ * Protocol v3: `sm`,`fm`,`cm` int nm; `Si`,`Ri` int (÷1e4 = float); `Fb` fired bitfield.
+ * Trajectory from `cb`/`c`; hello `L` (layout). v2 `S`/`F`/`R` arrays still supported if present.
  * Food UX: separate frames `fa` / `fr` / `fe` with `n` = count (viewer commands vs worm eaten).
  * HUD food count from state `f`. Dashed erase preview ring = `remove_food_near`
  * radius in model mm (pellets drawn larger for visibility).
@@ -177,13 +176,46 @@
   const DEFAULT_WS_URL = "wss://distinctly-eager-cod.ngrok-free.app";
   /** Upper cap for zoom (screen pixels per world mm); worm is sub-mm so allow deep zoom */
   const MAX_SCALE_PX_PER_MM = 800;
-  const PROTOCOL = 2;
+  const PROTOCOL = 3;
   /** Max COM samples kept client-side (was 2000 on server). */
   const TRAJECTORY_MAX = 2000;
   /** When trajectory has more points, draw every Nth sample (still capped by TRAJECTORY_MAX). */
   const TRAJECTORY_DRAW_CAP = 900;
   /** Initial guess for packet spacing before first measurement (ms). */
   const DEFAULT_TICK_MS = 1000 / 12;
+
+  /** Server sends geometry as int nanometres from mm (`round(mm * 1e6)`). */
+  const WIRE_NM_PER_MM = 1e6;
+
+  function decodeSegmentsFromSm(sm) {
+    const out = [];
+    if (!Array.isArray(sm)) return out;
+    for (let i = 0; i + 1 < sm.length; i += 2) {
+      out.push([Number(sm[i]) / WIRE_NM_PER_MM, Number(sm[i + 1]) / WIRE_NM_PER_MM]);
+    }
+    return out;
+  }
+
+  function decodeFoodFromFm(fm) {
+    const out = [];
+    if (!Array.isArray(fm)) return out;
+    for (let i = 0; i + 1 < fm.length; i += 2) {
+      out.push([Number(fm[i]) / WIRE_NM_PER_MM, Number(fm[i + 1]) / WIRE_NM_PER_MM]);
+    }
+    return out;
+  }
+
+  /** Fired flags: bit ``i`` in little-endian packed bytes (matches server). */
+  function decodeFiredFromFb(fbB64, nNeurons) {
+    const bin = fbB64 && fbB64.length ? atob(fbB64) : "";
+    const u8 = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    const out = new Array(nNeurons);
+    for (let i = 0; i < nNeurons; i++) {
+      out[i] = (u8[i >> 3] >> (i & 7)) & 1;
+    }
+    return out;
+  }
   /** Max extrapolation past latest server pose, as a fraction of last blend span. */
   const EXTRAP_MAX_FRAC = 0.42;
   /** Hard cap on extrapolation (ms) so corrections stay small. */
@@ -1301,12 +1333,14 @@
 
   function applyStateMsg(msg) {
     const now = performance.now();
+    const segments_mm = Array.isArray(msg.sm) ? decodeSegmentsFromSm(msg.sm) : msg.s;
+    const food_mm = Array.isArray(msg.fm) ? decodeFoodFromFm(msg.fm) : msg.f;
     const incoming = {
       tick: msg.k,
       plate_radius_mm: msg.r,
       worm_radius_mm: msg.w,
-      segments_mm: msg.s,
-      food_mm: msg.f,
+      segments_mm,
+      food_mm,
     };
 
     let dtSinceLast = 0;
@@ -1335,7 +1369,13 @@
     targetState = incoming;
     blendStartMs = now;
 
-    if (Array.isArray(msg.c) && msg.c.length >= 2) {
+    if (Array.isArray(msg.cm) && msg.cm.length >= 2) {
+      trajectoryMm.push([
+        Number(msg.cm[0]) / WIRE_NM_PER_MM,
+        Number(msg.cm[1]) / WIRE_NM_PER_MM,
+      ]);
+      while (trajectoryMm.length > TRAJECTORY_MAX) trajectoryMm.shift();
+    } else if (Array.isArray(msg.c) && msg.c.length >= 2) {
       trajectoryMm.push([Number(msg.c[0]), Number(msg.c[1])]);
       while (trajectoryMm.length > TRAJECTORY_MAX) trajectoryMm.shift();
     }
@@ -1355,14 +1395,21 @@
       viewFitted = true;
     }
 
-    if (Array.isArray(msg.S)) {
-      lastNeuralS = msg.S.map(Number);
-    }
-    if (Array.isArray(msg.F)) {
-      lastNeuralF = msg.F.map((v) => (Number(v) ? 1 : 0));
-    }
-    if (Array.isArray(msg.R)) {
-      lastNeuralR = msg.R.map(Number);
+    const NEURAL_INT_SCALE = 1e-4;
+    if (Array.isArray(msg.Si) && Array.isArray(msg.Ri) && typeof msg.Fb === "string") {
+      lastNeuralS = msg.Si.map((x) => Number(x) * NEURAL_INT_SCALE);
+      lastNeuralR = msg.Ri.map((x) => Number(x) * NEURAL_INT_SCALE);
+      lastNeuralF = decodeFiredFromFb(msg.Fb, msg.Si.length);
+    } else {
+      if (Array.isArray(msg.S)) {
+        lastNeuralS = msg.S.map(Number);
+      }
+      if (Array.isArray(msg.F)) {
+        lastNeuralF = msg.F.map((v) => (Number(v) ? 1 : 0));
+      }
+      if (Array.isArray(msg.R)) {
+        lastNeuralR = msg.R.map(Number);
+      }
     }
 
   }

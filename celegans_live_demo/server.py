@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import json
 import math
 import queue
@@ -63,7 +64,14 @@ from celegans_live_demo.worm_snapshot import (
 # Hello: m = message (human hint)
 # Error: m = message
 # Client add/remove: x, y = position in mm
-PROTOCOL_VERSION = 2
+#
+# Protocol v3 (compact state):
+#   sm = segments — flattened [x,y,…] in nanometres as int (round(mm * 1e6)); length 2 * N_BODY_SEGMENTS
+#   fm = food — flattened pairs in nm (round(mm * 1e6)); length 2 * n_food
+#   cm = centre of mass [cx_nm, cy_nm] ints (same scale as sm)
+#   Si, Ri = membrane S and threshold R: int = round(float * 1e4) (client ÷ 1e4)
+#   Fb = ceil(n/8) base64, bit i = neuron i fired (1) or not (0)
+PROTOCOL_VERSION = 3
 BROADCAST_HZ = 60.0
 # Client display does not need float64 text; cap at 10 significant digits (~vs 16).
 WIRE_FLOAT_SIG_DIGITS = 10
@@ -263,6 +271,58 @@ def _quantize_snapshot_for_wire(snap: dict[str, Any]) -> dict[str, Any]:
             out[k] = _quantize_wire_payload(v, float_sig_digits=WIRE_SEGMENT_SIG_DIGITS)
         else:
             out[k] = _quantize_wire_payload(v)
+    return out
+
+
+def _scaled_int_wire(values: list[float], *, scale: float = 1e4) -> list[int]:
+    """Fixed-scale integers for JSON (smaller than long float text; compresses well)."""
+    return [int(round(float(x) * scale)) for x in values]
+
+
+def _mm_to_nm_int(mm: float) -> int:
+    """1 nm resolution from mm (matches 6 sigfig wire for segment coords)."""
+    return int(round(float(mm) * 1e6))
+
+
+def _b64_fired_bits(fired: list[int]) -> str:
+    """Pack 0/1 per neuron into bytes; bit ``i`` is ``fired[i]`` (LSB-first within each byte)."""
+    if not fired:
+        return ""
+    n = len(fired)
+    n_bytes = (n + 7) // 8
+    buf = bytearray(n_bytes)
+    for i, v in enumerate(fired):
+        if v:
+            buf[i >> 3] |= 1 << (i & 7)
+    return base64.b64encode(bytes(buf)).decode("ascii")
+
+
+def _snapshot_dict_to_wire(snap: dict[str, Any]) -> dict[str, Any]:
+    """Quantize floats, then replace dense arrays with compact v3 wire fields."""
+    q = _quantize_snapshot_for_wire(snap)
+    out: dict[str, Any] = {k: v for k, v in q.items() if k not in ("s", "f", "c", "S", "F", "R")}
+    if "s" in q:
+        sm: list[int] = []
+        for row in q["s"]:
+            sm.extend([_mm_to_nm_int(row[0]), _mm_to_nm_int(row[1])])
+        out["sm"] = sm
+    if "f" in q:
+        fm: list[int] = []
+        for row in q["f"]:
+            fm.extend([_mm_to_nm_int(row[0]), _mm_to_nm_int(row[1])])
+        out["fm"] = fm
+    if "c" in q:
+        c = q["c"]
+        out["cm"] = [_mm_to_nm_int(c[0]), _mm_to_nm_int(c[1])]
+    if "S" in q and "R" in q and "F" in q:
+        s_list = [float(x) for x in q["S"]]
+        r_list = [float(x) for x in q["R"]]
+        f_list = [int(x) for x in q["F"]]
+        if len(s_list) != len(r_list) or len(s_list) != len(f_list):
+            raise RuntimeError("S / R / F length mismatch in snapshot")
+        out["Si"] = _scaled_int_wire(s_list)
+        out["Ri"] = _scaled_int_wire(r_list)
+        out["Fb"] = _b64_fired_bits(f_list)
     return out
 
 
@@ -684,7 +744,7 @@ def main() -> None:
             hello: dict[str, Any] = {
                 "p": PROTOCOL_VERSION,
                 "t": "h",
-                "m": "t=a|v|i client x,y mm; t=s state; fa|fr|fe food events (n=count)",
+                "m": "v3 t=s: sm,fm,cm nm; Si,Ri÷1e4; Fb bits; t=a|v|i; fa|fr|fe",
             }
             if rt._neural_static is not None:
                 hello["L"] = rt._neural_static
@@ -794,9 +854,7 @@ def main() -> None:
             snap, food_events = rt.take_latest_for_broadcast()
             if not snap:
                 continue
-            payload = json.dumps(
-                _quantize_snapshot_for_wire(snap), separators=(",", ":")
-            )
+            payload = json.dumps(_snapshot_dict_to_wire(snap), separators=(",", ":"))
             food_payloads = [
                 json.dumps(ev, separators=(",", ":")) for ev in food_events
             ]
@@ -839,7 +897,12 @@ def main() -> None:
         try:
             # In case any import-time code touched loguru before the event loop ran.
             _configure_console_logging(args.log_level)
-            async with serve(handler, args.host, args.port):
+            async with serve(
+                handler,
+                args.host,
+                args.port,
+                compression="deflate",
+            ):
                 logger.info(
                     "WebSocket listening ws://{}:{} (protocol v{})",
                     args.host,
