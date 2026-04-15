@@ -4,6 +4,8 @@
  * Trajectory from `c`; hello `L` (layout);
  * each state may include `S` (V_m, 4 decimals), `F` (fired 0/1), and `R` (threshold r, 4 decimals).
  * Food UX: separate frames `fa` / `fr` / `fe` with `n` = count (viewer commands vs worm eaten).
+ * HUD food count from state `f`. Dashed erase preview ring = `remove_food_near`
+ * radius in model mm (pellets drawn larger for visibility).
  * Presence `t:"u"` with `n` = concurrent viewer count; client toasts join/leave from deltas.
  * Optional `bg.m4a` loops (lazy `src`, deferred play, `preload="none"`); `?nobg=1` / `?bg=0` skips.
  * Toast chimes reuse one `AudioContext` instead of constructing per beep.
@@ -22,6 +24,13 @@
    * Must match `active-inference/simulations/c_elegans/body_model.xml` `<option timestep="…">`.
    */
   const SIM_SECONDS_PER_TICK = 0.002;
+  /** Metres, from `active-inference/.../config.py` — must match server removal logic. */
+  const FOOD_CONSUMPTION_RADIUS_M = 0.0001;
+  /** `remove_food_near` default radius (m → mm). */
+  const FOOD_REMOVE_RADIUS_MM = FOOD_CONSUMPTION_RADIUS_M * 3 * 1000;
+  /** While right-drag erasing, avoid flooding the shared food command rate limiter. */
+  const FOOD_DRAG_REMOVE_MIN_INTERVAL_MS = 85;
+  const FOOD_DRAG_REMOVE_MIN_MOVE_MM = 0.11;
 
   const params = new URLSearchParams(window.location.search);
   /** Optional: layout CSS px that equal one real centimeter with a ruler (overrides auto density). */
@@ -187,6 +196,8 @@
   const TOUCH_LONG_PRESS_MS = 520;
   /** Pinch: ignore smaller finger separation (CSS px) to avoid unstable zoom. */
   const PINCH_MIN_DIST_PX = 12;
+  /** Pellet fill radius in world mm = this many CSS px / scale (matches food draw). */
+  const FOOD_PELLET_SCREEN_RADIUS_PX = 9;
 
   const WS_URL = params.get("ws") || DEFAULT_WS_URL;
   const NO_BG_MUSIC =
@@ -207,6 +218,7 @@
   const fpsEl = document.getElementById("fps");
   const tpsEl = document.getElementById("tps");
   const simSpsEl = document.getElementById("sim-sps-hud");
+  const foodCountHudEl = document.getElementById("food-count-hud");
   const barHintRow = document.getElementById("bar-hint-row");
   const controlsHint = document.getElementById("controls-hint");
   const hintDialog = document.getElementById("hint-dialog");
@@ -449,6 +461,31 @@
   }
 
   setupHintDialog();
+
+  function updateFoodHud(foodArr) {
+    if (!foodCountHudEl) return;
+    if (!Array.isArray(foodArr)) {
+      foodCountHudEl.textContent = "—";
+      return;
+    }
+    foodCountHudEl.textContent = String(foodArr.length);
+  }
+
+  /** Worm canvas: last mouse position in worm CSS px; `-1` = off canvas / not tracking. */
+  let wormEraseBrushCssX = -1;
+  let wormEraseBrushCssY = -1;
+  /** PC: secondary button held for drag-to-erase. */
+  let mouseEraseDragActive = false;
+  let mouseEraseDragPointerId = -1;
+  let lastEraseSendMs = 0;
+  let lastEraseSendWx = NaN;
+  let lastEraseSendWy = NaN;
+
+  function resetFoodEraseThrottle() {
+    lastEraseSendMs = 0;
+    lastEraseSendWx = NaN;
+    lastEraseSendWy = NaN;
+  }
 
   const NEURON_KIND_LABEL = {
     s: "Sensory",
@@ -726,6 +763,11 @@
     return [sx, sy];
   }
 
+  /** Mouse or pen — desktop-style worm controls (not touch-primary). */
+  function wormDesktopPointer(e) {
+    return e.pointerType === "mouse" || e.pointerType === "pen";
+  }
+
   function sendFoodAddWorld(wx, wy) {
     if (!window._ws || window._ws.readyState !== WebSocket.OPEN) return;
     window._ws.send(JSON.stringify({ p: PROTOCOL, t: "a", x: wx, y: wy }));
@@ -734,6 +776,27 @@
   function sendFoodRemoveWorld(wx, wy) {
     if (!window._ws || window._ws.readyState !== WebSocket.OPEN) return;
     window._ws.send(JSON.stringify({ p: PROTOCOL, t: "v", x: wx, y: wy }));
+  }
+
+  /**
+   * @param {number} wx
+   * @param {number} wy
+   * @param {boolean} force send even if under move/time throttle (pointer down)
+   */
+  function maybeSendFoodRemove(wx, wy, force) {
+    const now = performance.now();
+    const dist = Math.hypot(wx - lastEraseSendWx, wy - lastEraseSendWy);
+    if (
+      !force &&
+      now - lastEraseSendMs < FOOD_DRAG_REMOVE_MIN_INTERVAL_MS &&
+      !(dist >= FOOD_DRAG_REMOVE_MIN_MOVE_MM)
+    ) {
+      return;
+    }
+    lastEraseSendMs = now;
+    lastEraseSendWx = wx;
+    lastEraseSendWy = wy;
+    sendFoodRemoveWorld(wx, wy);
   }
 
   /** Zoom about (sx,sy) in worm CSS space; factor < 1 zooms out. */
@@ -890,21 +953,38 @@
 
     const foods = lastState.food_mm || [];
     const nFood = foods.length;
+    const foodPelletRWorld = lineWidthWorld(FOOD_PELLET_SCREEN_RADIUS_PX);
     if (nFood > 0) {
-      const foodRWorld = lineWidthWorld(9);
       ctx.beginPath();
       for (let i = 0; i < nFood; i++) {
         const f = foods[i];
         const fx = f[0];
         const fy = f[1];
-        ctx.moveTo(fx + foodRWorld, fy);
-        ctx.arc(fx, fy, foodRWorld, 0, Math.PI * 2);
+        ctx.moveTo(fx + foodPelletRWorld, fy);
+        ctx.arc(fx, fy, foodPelletRWorld, 0, Math.PI * 2);
       }
       ctx.fillStyle = "#c4b";
       ctx.fill();
       ctx.strokeStyle = "#202";
       ctx.lineWidth = lineWidthWorld(0.5);
       ctx.stroke();
+    }
+
+    if (
+      neuralFineHoverCapable() &&
+      wormEraseBrushCssX >= 0 &&
+      wormEraseBrushCssY >= 0
+    ) {
+      const [bwx, bwy] = screenToWorld(wormEraseBrushCssX, wormEraseBrushCssY);
+      /** Same world radius as `remove_food_near` (not pellet draw size, which is exaggerated for visibility). */
+      ctx.beginPath();
+      ctx.arc(bwx, bwy, FOOD_REMOVE_RADIUS_MM, 0, Math.PI * 2);
+      ctx.strokeStyle = "rgba(255, 130, 150, 0.62)";
+      ctx.lineWidth = lineWidthWorld(1.35);
+      const dashW = lineWidthWorld(5);
+      ctx.setLineDash([dashW, dashW * 0.65]);
+      ctx.stroke();
+      ctx.setLineDash([]);
     }
 
     ctx.restore();
@@ -1267,6 +1347,7 @@
       tpsPrevK = k;
     }
     setHudTickSimFromK(msg.k);
+    updateFoodHud(msg.f);
     if (!viewFitted && msg.r) {
       scale = (Math.min(wormCssW, wormCssH) / (2 * msg.r)) * 0.88;
       cx = 0;
@@ -1314,6 +1395,8 @@
       if (tpsEl) tpsEl.textContent = "—";
       if (simSpsEl) simSpsEl.textContent = "—";
       setHudTickSimFromK(-1);
+      updateFoodHud(null);
+      resetFoodEraseThrottle();
       syncAlertsToggleLabel();
     };
     ws.onclose = () => {
@@ -1321,6 +1404,7 @@
       statusEl.className = "err";
       if (onlineEl) onlineEl.textContent = "— online";
       setHudTickSimFromK(-1);
+      updateFoodHud(null);
       if (tpsEl) tpsEl.textContent = "—";
       if (simSpsEl) simSpsEl.textContent = "—";
       setTimeout(connect, 3000);
@@ -1384,7 +1468,7 @@
         wormPtr.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
       }
 
-      if (e.pointerType === "mouse") {
+      if (wormDesktopPointer(e)) {
         if (e.button === 1 || (e.button === 0 && e.shiftKey)) {
           panning = true;
           panPointerId = e.pointerId;
@@ -1408,7 +1492,12 @@
         if (e.button === 2) {
           const [sx, sy] = clientToWormCss(e.clientX, e.clientY);
           const [wx, wy] = screenToWorld(sx, sy);
-          sendFoodRemoveWorld(wx, wy);
+          mouseEraseDragActive = true;
+          mouseEraseDragPointerId = e.pointerId;
+          maybeSendFoodRemove(wx, wy, true);
+          try {
+            canvas.setPointerCapture(e.pointerId);
+          } catch (_) {}
           e.preventDefault();
           return;
         }
@@ -1490,6 +1579,18 @@
       }
 
       if (
+        wormDesktopPointer(e) &&
+        mouseEraseDragActive &&
+        e.pointerId === mouseEraseDragPointerId &&
+        (e.buttons & 2)
+      ) {
+        const [sx, sy] = clientToWormCss(e.clientX, e.clientY);
+        const [wx, wy] = screenToWorld(sx, sy);
+        maybeSendFoodRemove(wx, wy, false);
+        e.preventDefault();
+      }
+
+      if (
         e.pointerType === "touch" &&
         touchDownId === e.pointerId &&
         wormPtr.size === 1
@@ -1513,9 +1614,20 @@
         }
         e.preventDefault();
       }
+
+      if (wormDesktopPointer(e)) {
+        const [sx, sy] = clientToWormCss(e.clientX, e.clientY);
+        wormEraseBrushCssX = sx;
+        wormEraseBrushCssY = sy;
+      }
     },
     { passive: false }
   );
+
+  canvas.addEventListener("pointerleave", () => {
+    wormEraseBrushCssX = -1;
+    wormEraseBrushCssY = -1;
+  });
 
   function wormPointerUp(e) {
     const wasTwo = wormPtr.size === 2;
@@ -1526,6 +1638,11 @@
     if (e.pointerId === panPointerId) {
       panning = false;
       panPointerId = -1;
+    }
+
+    if (wormDesktopPointer(e) && e.pointerId === mouseEraseDragPointerId) {
+      mouseEraseDragActive = false;
+      mouseEraseDragPointerId = -1;
     }
 
     if (wasTwo && wormPtr.size < 2) {
@@ -1564,6 +1681,10 @@
     if (e.pointerId === panPointerId) {
       panning = false;
       panPointerId = -1;
+    }
+    if (wormDesktopPointer(e) && e.pointerId === mouseEraseDragPointerId) {
+      mouseEraseDragActive = false;
+      mouseEraseDragPointerId = -1;
     }
   });
 
