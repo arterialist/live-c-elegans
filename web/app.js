@@ -186,6 +186,20 @@
 
   /** Server sends geometry as int nanometres from mm (`round(mm * 1e6)`). */
   const WIRE_NM_PER_MM = 1e6;
+  /** Wire `Si` / `Ri`: int × this = mV / threshold (4 decimal places). Same as legacy JSON `S`/`R` precision. */
+  const NEURAL_WIRE_SCALE = 1e-4;
+  const NEURAL_WIRE_DECIMALS = 4;
+
+  /**
+   * Format membrane / threshold for tooltips and modal. Quantizes to wire precision so
+   * `int × NEURAL_WIRE_SCALE` decompression does not show binary float noise (e.g. …00000004).
+   */
+  function formatNeuralMetric(value) {
+    if (!Number.isFinite(value)) return "—";
+    const rounded =
+      Math.round(value / NEURAL_WIRE_SCALE) * NEURAL_WIRE_SCALE;
+    return rounded.toFixed(NEURAL_WIRE_DECIMALS);
+  }
 
   function decodeSegmentsFromSm(sm) {
     const out = [];
@@ -618,10 +632,10 @@
       addRow("Connectome metadata", "Not in hello (reconnect after server update).");
     }
     if (idx < lastNeuralS.length) {
-      addRow("V_m (this tick)", String(lastNeuralS[idx]));
+      addRow("V_m (this tick)", formatNeuralMetric(lastNeuralS[idx]));
     }
     if (idx < lastNeuralR.length) {
-      addRow("Threshold r (this tick)", String(lastNeuralR[idx]));
+      addRow("Threshold r (this tick)", formatNeuralMetric(lastNeuralR[idx]));
     }
     if (idx < lastNeuralF.length) {
       addRow("Fired (O>0)", lastNeuralF[idx] ? "Yes" : "No");
@@ -1203,10 +1217,10 @@
     }
     let line = layoutNames[idx];
     if (idx < lastNeuralS.length) {
-      line += " · V_m=" + lastNeuralS[idx];
+      line += " · V_m=" + formatNeuralMetric(lastNeuralS[idx]);
     }
     if (idx < lastNeuralR.length) {
-      line += " · r=" + lastNeuralR[idx];
+      line += " · r=" + formatNeuralMetric(lastNeuralR[idx]);
     }
     if (idx < lastNeuralF.length && lastNeuralF[idx]) {
       line += " · fired";
@@ -1395,10 +1409,9 @@
       viewFitted = true;
     }
 
-    const NEURAL_INT_SCALE = 1e-4;
     if (Array.isArray(msg.Si) && Array.isArray(msg.Ri) && typeof msg.Fb === "string") {
-      lastNeuralS = msg.Si.map((x) => Number(x) * NEURAL_INT_SCALE);
-      lastNeuralR = msg.Ri.map((x) => Number(x) * NEURAL_INT_SCALE);
+      lastNeuralS = msg.Si.map((x) => Number(x) * NEURAL_WIRE_SCALE);
+      lastNeuralR = msg.Ri.map((x) => Number(x) * NEURAL_WIRE_SCALE);
       lastNeuralF = decodeFiredFromFb(msg.Fb, msg.Si.length);
     } else {
       if (Array.isArray(msg.S)) {
