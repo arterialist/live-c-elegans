@@ -4,9 +4,23 @@ Runs the [active-inference](https://github.com/arterialist/active-inference) sim
 
 **Public viewer:** [https://jimmy.arteriali.st](https://jimmy.arteriali.st) (static `web/` build). The browser uses the WebSocket URL from the `ws` query parameter if set, otherwise `DEFAULT_WS_URL` in `web/app.js`—point that constant or `?ws=` at a reachable **`wss://`** server running `celegans-demo-server`.
 
+## Repository layout (local dev)
+
+This package depends on **`active-inference`** as an editable path dependency (`../active-inference` in `pyproject.toml`). That simulation, in turn, loads PAULA from a **sibling directory** named **`neuron-model`** (see `active-inference/simulations/paula_loader.py`, which prepends `…/neuron-model` to `sys.path`). For `uv sync` / imports to work the same way as a typical local checkout, clone repos **side by side** under a common parent, for example:
+
+```text
+your-workspace/
+  celegans-live-demo/    # this repo
+  active-inference/      # required — editable dep
+  neuron-model/          # required — PAULA ([arterialist/neuron-model](https://github.com/arterialist/neuron-model))
+```
+
+If your PAULA checkout lives under another folder name, symlink or rename it to **`neuron-model`** next to **`active-inference`** so the loader path matches.
+
 ## Prerequisites
 
 - Same environment expectations as `active-inference` (Python 3.11+, MuJoCo, connectome cache after first run).
+- **`neuron-model`** and **`active-inference`** available as above; running only from a lone `celegans-live-demo` clone without those siblings will not satisfy the path dependency or PAULA import path.
 
 ## Run the server
 
@@ -59,31 +73,60 @@ http://127.0.0.1:8080/?ws=ws://127.0.0.1:8765
 2. Set `DEFAULT_WS_URL` in `app.js` to your public **`wss://`** endpoint (Cloudflare Tunnel, ngrok, …) pointing at this server’s port, or rely on `?ws=` for ad-hoc backends.
 3. Keep `celegans-demo-server` + tunnel running while the “live worm” should be visible.
 
-## Protocol (version 2, compact keys)
+## Protocol (version 3, compact wire)
 
-Wire format uses short keys and **no server-side trajectory** (the client appends each `c` = centre-of-mass sample to a local trail, max 2000 points).
+Wire format uses short keys. **`p` must be `3`** on every frame; otherwise the server replies with `t: "e"` (`unsupported protocol version`). There is **no server-side trajectory**: the client appends each centre-of-mass sample to a local trail (max 2000 points).
+
+### Message types (`t`)
+
+| `t` | Direction | Role |
+|-----|-----------|------|
+| `h` | server→client | Hello after connect |
+| `s` | server→client | Simulation snapshot (geometry + neural summary) |
+| `e` | server→client | Error (`m` text) |
+| `o` | server→client | Pong (reply to client `i`) |
+| `u` | server→client | Presence: `n` = concurrent WebSocket client count |
+| `fa` | server→client | Food **added** by viewers — `n` = pellet count since last broadcast window (aggregated; **separate JSON frame**, sent after `s` when non-zero) |
+| `fr` | server→client | Food **removed** by viewers — `n` count (same rules as `fa`) |
+| `fe` | server→client | Food **eaten** by the worm — `n` count (same rules as `fa`) |
+| `a` | client→server | Add food at `x`, `y` (mm) |
+| `v` | client→server | Remove food near `x`, `y` (mm) |
+| `i` | client→server | Ping |
+
+### State frame (`t` = `s`)
 
 | Key | Meaning |
 |-----|---------|
-| `p` | protocol version (`2`) |
-| `t` | type: server→client `h` hello, `s` state, `e` error, `o` pong, `u` presence (viewer count); client→server `a` add food, `v` remove food, `i` ping |
+| `p` | protocol version (`3`) |
+| `t` | `"s"` |
 | `k` | tick (simulation step index) |
 | `r` | plate_radius_mm |
 | `w` | worm_radius_mm |
-| `s` | segments_mm — 13 × `[x,y]` mm (wire: **6** significant figures per coordinate) |
-| `f` | food_mm — list of `[x,y]` mm |
-| `c` | com_mm — centre of mass `[x,y]` mm (one point per state; client builds trajectory) |
-| `n` | concurrent viewer count (`u` only) |
-| `m` | message text (`h` / `e`) |
-| `x`, `y` | position in mm (`a` / `v` from client) |
-| `L` | hello only: connectome layout `{ nm, ax, ay }` — Cook A→P index as `ax`∈[0,1], D/V heuristic as `ay` (see `connectome_layout.py`) |
-| `M` | hello only: parallel to `nm`: `{ k, ic, ig, oc, og }` per neuron — `k` = class (`s` sensory / `m` motor / `i` interneuron / `u` unknown); `ic`/`oc` = in/out chemical synapse degree, `ig`/`og` = gap junction degree (Cook connectome) |
-| `S` | state: membrane potentials (mV), one float per PAULA neuron id, **4 decimals** |
-| `F` | state: fired flags `0`/`1` per id (same length as `S`) |
+| `sm` | Segments: flattened `[x,y,…]` in **nanometres** as integers, `round(mm × 10⁶)`; length `2 × N_BODY_SEGMENTS` (13 segments) |
+| `fm` | Food pellets: flattened pairs in **nm** (same scale as `sm`) |
+| `cm` | Centre of mass `[cx_nm, cy_nm]` in **nm** (same scale) |
+| `Si` | Membrane `S` per PAULA neuron id: `round(float × 10⁴)` (client ÷ `10⁴`) |
+| `Ri` | Dynamic primary threshold `r`, same integer encoding as `Si` |
+| `Fb` | Fired flags: **base64** of a bit-packed byte string; bit *i* (LSB-first within each byte) is `1` if neuron *i* fired (`O > 0`), else `0` |
+
+### Hello (`t` = `h`)
+
+| Key | Meaning |
+|-----|---------|
+| `m` | Short human-readable hint (e.g. protocol summary) |
+| `L` | Optional connectome layout `{ nm, ax, ay }` — Cook A→P as `ax`∈[0,1], D/V heuristic as `ay` (see `connectome_layout.py`) |
+| `M` | Optional list parallel to `L.nm`: per neuron `{ k, ic, ig, oc, og }` — `k` = class (`s` sensory / `m` motor / `i` interneuron / `u` unknown); `ic`/`oc` = in/out chemical synapse degree, `ig`/`og` = gap junction degree (Cook connectome) |
+
+### Food / presence aux frames
+
+- `fa` / `fr` / `fe`: only `p`, `t`, and **`n`** (non-negative integer counts). Emitted **after** the `s` frame for that broadcast tick when any count is non-zero.
+- `u`: `p`, `t`, **`n`** = online viewer count.
 
 Broadcast cadence is **60 Hz** with **latest-state only**: if the sim runs faster, intermediate frames are not queued. If a client send blocks longer than the server timeout, that frame is skipped for that client (the next tick still carries fresh data).
 
-- Client → server examples: `{ "p": 2, "t": "a", "x": 1.2, "y": -3.4 }`, `{ "p": 2, "t": "i" }`.
+- Client → server examples: `{ "p": 3, "t": "a", "x": 1.2, "y": -3.4 }`, `{ "p": 3, "t": "i" }`.
+
+The bundled `web/app.js` can still interpret **legacy v2-style** keys on a state message (`c` / `s` / `f` / `S` / `F` / `R`) if they were ever present; the **server** currently emits **v3** fields above after internal snapshot conversion (`_snapshot_dict_to_wire` in `server.py`).
 
 ## Limits
 
