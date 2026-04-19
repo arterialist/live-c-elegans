@@ -3,7 +3,7 @@ import { clsx } from "clsx";
 import { RotateCcw } from "lucide-react";
 import { TabShell } from "./TabShell";
 import { useLabStore } from "../../state/store";
-import { useAppSettings, type AppSettings } from "../../state/app-settings";
+import { useAppSettings, type WormViewMode } from "../../state/app-settings";
 import { resetSim } from "../../api/http";
 import { GuideButton, type GuideContent } from "../ui/GuideModal";
 import { KeyHint } from "../ui/KeyHint";
@@ -60,6 +60,10 @@ export function AppSettingsTab() {
         </Section>
 
         <Section title="Rendering">
+          <WormViewRow
+            value={settings.wormViewMode}
+            onChange={(v) => settings.set("wormViewMode", v)}
+          />
           <NumberRow
             label="Sparkline history"
             hint="Samples retained by each live chart. Bigger = smoother but slower."
@@ -79,6 +83,19 @@ export function AppSettingsTab() {
             step={10}
             onChange={(v) => settings.set("renderFpsCap", v)}
             guide={GUIDES.renderFpsCap}
+          />
+        </Section>
+
+        <Section title="Connectome map">
+          <NumberRow
+            label="Neuron dot size"
+            hint="1× default radii on the WYSIWYG map; up to 2× for readability."
+            value={settings.connectomeNeuronScale}
+            min={1}
+            max={2}
+            step={0.05}
+            onChange={(v) => settings.set("connectomeNeuronScale", v)}
+            guide={GUIDES.connectomeNeuronScale}
           />
         </Section>
 
@@ -150,6 +167,45 @@ export function AppSettingsTab() {
         </div>
       </div>
     </TabShell>
+  );
+}
+
+function WormViewRow({
+  value,
+  onChange,
+}: {
+  value: WormViewMode;
+  onChange: (v: WormViewMode) => void;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 px-4 py-2.5">
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <div className="text-sm text-zinc-300">Worm view</div>
+          <GuideButton title="Worm view" guide={GUIDES.wormViewMode} />
+        </div>
+        <p className="text-[11px] text-zinc-500">
+          2D canvas (XY) or Three.js orbit view with exaggerated Z.
+        </p>
+      </div>
+      <div className="flex shrink-0 rounded-md border border-zinc-700 p-0.5">
+        {(["2d", "3d"] as const).map((mode) => (
+          <button
+            key={mode}
+            type="button"
+            onClick={() => onChange(mode)}
+            className={clsx(
+              "rounded px-2.5 py-1 text-xs font-medium tracking-wide uppercase",
+              value === mode
+                ? "bg-accent/25 text-zinc-100"
+                : "text-zinc-500 hover:text-zinc-300",
+            )}
+          >
+            {mode === "2d" ? "2D" : "3D"}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -235,7 +291,7 @@ function NumberRow({
   min: number;
   max: number;
   step: number;
-  onChange: (v: AppSettings["historyLength"]) => void;
+  onChange: (v: number) => void;
   guide?: GuideContent;
 }) {
   return (
@@ -302,9 +358,19 @@ const GUIDES: Record<string, GuideContent> = {
       },
     ],
   },
+  wormViewMode: {
+    summary:
+      "Chooses the main worm visualization in the right pane: the original 2D canvas (XY projection) or a Three.js scene with orbit controls.",
+    sections: [
+      {
+        heading: "3D mode",
+        body: "Uses wire protocol v5 segment triplets (x,y,z mm) and exaggerates Z so sub-millimetre out-of-plane motion stays visible. Drag to orbit; scroll to zoom.",
+      },
+    ],
+  },
   renderFpsCap: {
     summary:
-      "Soft ceiling on how often heavy canvases (the worm view, connectome map, body WYSIWYG, sparklines) redraw themselves.",
+      "Soft ceiling on how often heavy canvases (the worm 2D/3D view, connectome map, body WYSIWYG, sparklines) redraw themselves.",
     sections: [
       {
         heading: "Suggested values",
@@ -328,6 +394,16 @@ const GUIDES: Record<string, GuideContent> = {
       {
         heading: "Notes",
         body: "The simulation tick rate is independent of this setting; it only affects how often you see updates, not how often the backend integrates.",
+      },
+    ],
+  },
+  connectomeNeuronScale: {
+    summary:
+      "Multiplies neuron disk radii on the Connectome WYSIWYG map (1× default, 2× maximum).",
+    sections: [
+      {
+        heading: "When to raise it",
+        body: "Useful on high-DPI screens or when edges are hidden and you still need to pick cells by eye. Larger dots also widen the click target.",
       },
     ],
   },
@@ -392,7 +468,7 @@ const GUIDES: Record<string, GuideContent> = {
     sections: [
       {
         heading: "1. Local UI settings are cleared",
-        body: "Sparkline history, FPS cap, overlay toggles and the WebSocket override reset to their defaults. Nothing on the backend is touched by this step.",
+        body: "Sparkline history, FPS cap, worm 2D/3D mode, connectome neuron size, overlay toggles, and the WebSocket override reset to their defaults. Nothing on the backend is touched by this step.",
       },
       {
         heading: "2. Simulation reset is requested",

@@ -40,7 +40,7 @@ export function WormCanvas() {
       ctx.fillStyle = "#0a0a0a";
       ctx.fillRect(0, 0, w, h);
 
-      if (!latest || latest.segments_mm.length < 4) {
+      if (!latest || latest.segments_mm.length < 9) {
         drawStatus(ctx, w, h, "Waiting for simulation…");
         return;
       }
@@ -49,6 +49,7 @@ export function WormCanvas() {
       const minDim = Math.min(w, h);
       const pxPerMm = (minDim / BODY_LENGTH_MM) * zoom;
       const [cx, cy] = latest.com_mm;
+      const cz = latest.com_mm[2];
 
       if (showGrid) drawMmGrid(ctx, w, h, pxPerMm, cx, cy);
 
@@ -84,7 +85,7 @@ export function WormCanvas() {
       grad.addColorStop(1, "#e2e8ff");
       ctx.strokeStyle = grad;
       ctx.beginPath();
-      for (let i = 0; i < seg.length; i += 2) {
+      for (let i = 0; i < seg.length; i += 3) {
         const [px, py] = toPx(seg[i], seg[i + 1]);
         if (i === 0) ctx.moveTo(px, py);
         else ctx.lineTo(px, py);
@@ -93,7 +94,7 @@ export function WormCanvas() {
 
       // Segment dots
       ctx.fillStyle = "#c4d2ff";
-      for (let i = 0; i < seg.length; i += 2) {
+      for (let i = 0; i < seg.length; i += 3) {
         const [px, py] = toPx(seg[i], seg[i + 1]);
         ctx.beginPath();
         ctx.arc(px, py, 2, 0, Math.PI * 2);
@@ -111,7 +112,7 @@ export function WormCanvas() {
         ctx.font =
           "12px ui-monospace, SFMono-Regular, Menlo, Monaco, monospace";
         ctx.fillText(
-          `tick=${latest.tick}  zoom=${(zoom * 100).toFixed(0)}%  COM=(${cx.toFixed(2)}, ${cy.toFixed(2)}) mm`,
+          `tick=${latest.tick}  zoom=${(zoom * 100).toFixed(0)}%  COM=(${cx.toFixed(2)}, ${cy.toFixed(2)}, ${cz.toFixed(3)}) mm`,
           12,
           20,
         );

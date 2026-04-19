@@ -11,6 +11,7 @@ import { useAppSettings } from "../state/app-settings";
 export function Sparkline({
   label,
   sample,
+  markerSample,
   history,
   color = "oklch(0.85 0.2 265)",
   min,
@@ -20,6 +21,8 @@ export function Sparkline({
 }: {
   label: string;
   sample: () => number | null;
+  /** When provided, truthy samples draw a vertical marker at that history column (e.g. spikes). */
+  markerSample?: () => number | null;
   history?: number;
   color?: string;
   min?: number;
@@ -32,17 +35,26 @@ export function Sparkline({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const valueRef = useRef<HTMLSpanElement | null>(null);
   const bufRef = useRef<Float32Array>(new Float32Array(historySize));
+  const markRef = useRef<Uint8Array | null>(null);
   const headRef = useRef(0);
   const lenRef = useRef(0);
   const lastRef = useRef<number | null>(null);
 
-  // Resize ring buffer when the user changes history length.
+  // Resize value ring buffer when history length changes; keep marker buffer aligned.
   useEffect(() => {
-    if (bufRef.current.length === historySize) return;
-    bufRef.current = new Float32Array(historySize);
-    headRef.current = 0;
-    lenRef.current = 0;
-  }, [historySize]);
+    if (bufRef.current.length !== historySize) {
+      bufRef.current = new Float32Array(historySize);
+      headRef.current = 0;
+      lenRef.current = 0;
+    }
+    if (markerSample) {
+      if (!markRef.current || markRef.current.length !== historySize) {
+        markRef.current = new Uint8Array(historySize);
+      }
+    } else {
+      markRef.current = null;
+    }
+  }, [historySize, markerSample]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -54,6 +66,12 @@ export function Sparkline({
         const buf = bufRef.current;
         const head = headRef.current;
         buf[head] = v;
+        const marks = markRef.current;
+        if (markerSample && marks) {
+          const m = markerSample();
+          marks[head] =
+            m != null && Number.isFinite(m) && Math.abs(m) > 1e-6 ? 1 : 0;
+        }
         headRef.current = (head + 1) % buf.length;
         lenRef.current = Math.min(buf.length, lenRef.current + 1);
         lastRef.current = v;
@@ -91,6 +109,23 @@ export function Sparkline({
         }
         const range = hi - lo || 1;
         const stepX = w / (buf.length - 1);
+        const marks = markRef.current;
+        if (markerSample && marks) {
+          ctx.save();
+          ctx.strokeStyle = "rgb(220, 38, 38)";
+          ctx.lineWidth = 1.125;
+          ctx.lineCap = "butt";
+          for (let i = 0; i < len; i++) {
+            const idx = (headRef.current - len + i + buf.length) % buf.length;
+            if (!marks[idx]) continue;
+            const x = (buf.length - len + i) * stepX;
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, h);
+            ctx.stroke();
+          }
+          ctx.restore();
+        }
         ctx.strokeStyle = color;
         ctx.lineWidth = 1.25;
         ctx.beginPath();
@@ -114,7 +149,7 @@ export function Sparkline({
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
-  }, [sample, color, min, max, format]);
+  }, [sample, markerSample, color, min, max, format]);
 
   return (
     <div className="grid grid-cols-[80px_1fr_70px] items-center gap-2">

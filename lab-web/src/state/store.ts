@@ -30,8 +30,10 @@ export interface HelloFrame {
 export interface StateFrame {
   tick: number;
   running: boolean;
-  segments_mm: Float32Array; // flat [x0,y0, x1,y1, …]
-  com_mm: [number, number];
+  /** Flat ``[x0,y0,z0, …]`` segment CoMs in mm (wire v5). */
+  segments_mm: Float32Array;
+  /** Mass-weighted COM in mm. */
+  com_mm: [number, number, number];
   S: Float32Array;
   R: Float32Array;
   B: Float32Array;

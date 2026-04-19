@@ -20,6 +20,16 @@ class TransportAction(BaseModel):
     action: Literal["play", "pause", "step"]
 
 
+class PacingBody(BaseModel):
+    """Optional wall-clock pacing for the lab sim thread (milliseconds).
+
+    ``0`` means no added delay for that axis (run as fast as the CPU allows).
+    """
+
+    real_ms_per_physics_step: float | None = None
+    real_ms_per_neural_tick: float | None = None
+
+
 class Patch(BaseModel):
     path: str
     value: Any
@@ -30,15 +40,31 @@ class PatchBody(BaseModel):
 
 
 class NeuronParamPatch(BaseModel):
-    """One field inside a :class:`NeuronParameters` dataclass.
+    """Patch neuron parameters, runtime state, or synaptic terminals.
 
-    ``index`` is optional and used only when patching a single entry of a
-    vector field (``gamma``, ``w_r``, ``w_b``, ``w_tref``). Scalars ignore it.
+    * **Params scalars** — ``field`` is ``r_base``, ``c``, … (see
+      ``_NEURON_SCALAR_FIELDS``); ``index`` / ``subfield`` ignored.
+    * **Params vectors** — ``field`` is ``gamma`` / ``w_r`` / ``w_b`` /
+      ``w_tref``: either replace the whole vector (``value`` is a list,
+      ``index`` is None) or set one slot (``index`` = element, ``value`` =
+      number).
+    * **Runtime** — ``field`` is ``S``, ``O``, ``r``, ``b``, ``t_ref``,
+      ``F_avg``, ``t_last_fire``; scalar ``value`` on the live neuron.
+    * **``M_vector``** — same pattern as params vectors but on the neuron
+      object (length = ``num_neuromodulators``).
+    * **Postsynaptic** — ``field`` = ``postsynaptic``, ``index`` = synapse
+      slot id; ``subfield`` one of ``info``, ``plast``, ``potential``,
+      ``adapt`` (``adapt`` requires ``vec_index``).
+    * **Presynaptic** — ``field`` = ``presynaptic``, ``index`` = terminal id;
+      ``subfield`` ``u_o_info``, ``u_i_retro``, or ``mod`` (``mod`` requires
+      ``vec_index``).
     """
 
     field: str
     value: Any
     index: int | None = None
+    subfield: str | None = None
+    vec_index: int | None = None
 
 
 class NeuronPatchBody(BaseModel):
@@ -77,6 +103,15 @@ _NEURON_SCALAR_FIELDS: dict[str, type] = {
     "beta_avg": float,
 }
 _NEURON_VECTOR_FIELDS = ("gamma", "w_r", "w_b", "w_tref")
+_NEURON_RUNTIME_FIELDS: dict[str, type] = {
+    "S": float,
+    "O": float,
+    "r": float,
+    "b": float,
+    "t_ref": float,
+    "F_avg": float,
+    "t_last_fire": float,
+}
 
 
 class AppContext:
@@ -108,6 +143,17 @@ def build_rest_router(app_ctx: AppContext) -> APIRouter:
         if body.action == "step":
             return app_ctx.runtime.step_once()
         raise HTTPException(status_code=400, detail=f"unknown action: {body.action}")
+
+    @router.get("/sim/pacing")
+    def get_pacing() -> dict[str, Any]:
+        return app_ctx.runtime.pacing_snapshot()
+
+    @router.post("/sim/pacing")
+    def set_pacing(body: PacingBody) -> dict[str, Any]:
+        return app_ctx.runtime.set_pacing(
+            real_ms_per_physics_step=body.real_ms_per_physics_step,
+            real_ms_per_neural_tick=body.real_ms_per_neural_tick,
+        )
 
     @router.get("/schema")
     def schema() -> dict[str, Any]:
@@ -152,6 +198,35 @@ def build_rest_router(app_ctx: AppContext) -> APIRouter:
         if neuron is None:
             raise HTTPException(status_code=404, detail=f"unknown neuron: {name}")
         params = neuron.params
+        id_to_name = {nid: nm for nm, nid in ns.name_to_id.items()}
+        postsynaptic: list[dict[str, Any]] = []
+        for sid in sorted(neuron.postsynaptic_points.keys()):
+            pt = neuron.postsynaptic_points[sid]
+            src = neuron.synapse_sources.get(sid)
+            pre_name = id_to_name.get(src[0]) if src else None
+            postsynaptic.append(
+                {
+                    "id": int(sid),
+                    "pre_paula_id": int(src[0]) if src else None,
+                    "pre_terminal": int(src[1]) if src else None,
+                    "pre_name": pre_name,
+                    "info": float(pt.u_i.info),
+                    "plast": float(pt.u_i.plast),
+                    "adapt": [float(x) for x in pt.u_i.adapt],
+                    "potential": float(pt.potential),
+                }
+            )
+        presynaptic: list[dict[str, Any]] = []
+        for tid in sorted(neuron.presynaptic_points.keys()):
+            pr = neuron.presynaptic_points[tid]
+            presynaptic.append(
+                {
+                    "id": int(tid),
+                    "u_o_info": float(pr.u_o.info),
+                    "u_o_mod": [float(x) for x in pr.u_o.mod],
+                    "u_i_retro": float(pr.u_i_retro),
+                }
+            )
         return {
             "name": name,
             "paula_id": int(neuron.id),
@@ -160,8 +235,12 @@ def build_rest_router(app_ctx: AppContext) -> APIRouter:
             "r": float(neuron.r),
             "b": float(neuron.b),
             "t_ref": float(neuron.t_ref),
+            "F_avg": float(neuron.F_avg),
+            "t_last_fire": float(neuron.t_last_fire),
             "M_vector": [float(x) for x in neuron.M_vector],
             "pq_len": int(len(neuron.propagation_queue)),
+            "postsynaptic": postsynaptic,
+            "presynaptic": presynaptic,
             "params": {
                 "r_base": float(params.r_base),
                 "b_base": float(params.b_base),
@@ -197,13 +276,102 @@ def build_rest_router(app_ctx: AppContext) -> APIRouter:
 
         import numpy as np
 
+        from neuron.neuron import MAX_SYNAPTIC_WEIGHT, MIN_SYNAPTIC_WEIGHT
+
         applied: list[dict[str, Any]] = []
         failed: list[dict[str, Any]] = []
         with app_ctx.runtime.sim_lock:
             params = neuron.params
             for patch in body.patches:
                 try:
-                    if patch.field in _NEURON_SCALAR_FIELDS:
+                    if patch.field in _NEURON_RUNTIME_FIELDS:
+                        caster = _NEURON_RUNTIME_FIELDS[patch.field]
+                        setattr(neuron, patch.field, caster(patch.value))
+                        applied.append({"field": patch.field})
+                    elif patch.field == "M_vector":
+                        arr = neuron.M_vector
+                        if patch.index is None:
+                            new_arr = np.asarray(patch.value, dtype=float).reshape(
+                                -1,
+                            )
+                            if new_arr.shape[0] != arr.shape[0]:
+                                raise ValueError(
+                                    f"M_vector length {new_arr.shape[0]} != {arr.shape[0]}"
+                                )
+                            neuron.M_vector = new_arr.astype(float, copy=True)
+                            applied.append({"field": patch.field})
+                        else:
+                            if not (0 <= patch.index < arr.shape[0]):
+                                raise IndexError(
+                                    f"M_vector[{patch.index}] out of range"
+                                )
+                            arr[patch.index] = float(patch.value)
+                            applied.append(
+                                {"field": patch.field, "index": patch.index}
+                            )
+                    elif patch.field == "postsynaptic":
+                        if patch.index is None:
+                            raise ValueError("postsynaptic patch requires index (slot id)")
+                        pt = neuron.postsynaptic_points.get(patch.index)
+                        if pt is None:
+                            raise KeyError(f"unknown postsynaptic slot {patch.index}")
+                        sf = (patch.subfield or "info").lower().replace("u_i.", "")
+                        if sf == "info":
+                            v = float(patch.value)
+                            pt.u_i.info = float(
+                                np.clip(v, MIN_SYNAPTIC_WEIGHT, MAX_SYNAPTIC_WEIGHT)
+                            )
+                        elif sf == "plast":
+                            pt.u_i.plast = float(patch.value)
+                        elif sf == "potential":
+                            pt.potential = float(patch.value)
+                        elif sf == "adapt":
+                            if patch.vec_index is None:
+                                raise ValueError("adapt patch requires vec_index")
+                            if not (0 <= patch.vec_index < pt.u_i.adapt.shape[0]):
+                                raise IndexError("adapt vec_index out of range")
+                            pt.u_i.adapt[patch.vec_index] = float(patch.value)
+                        else:
+                            raise KeyError(f"unknown postsynaptic subfield: {patch.subfield}")
+                        applied.append(
+                            {
+                                "field": patch.field,
+                                "index": patch.index,
+                                "subfield": patch.subfield,
+                                "vec_index": patch.vec_index,
+                            }
+                        )
+                    elif patch.field == "presynaptic":
+                        if patch.index is None:
+                            raise ValueError("presynaptic patch requires index (terminal id)")
+                        pr = neuron.presynaptic_points.get(patch.index)
+                        if pr is None:
+                            raise KeyError(f"unknown presynaptic terminal {patch.index}")
+                        sf = (patch.subfield or "u_o_info").lower()
+                        if sf in ("u_o_info", "info", "u_o.info"):
+                            v = float(patch.value)
+                            pr.u_o.info = float(
+                                np.clip(v, MIN_SYNAPTIC_WEIGHT, MAX_SYNAPTIC_WEIGHT)
+                            )
+                        elif sf in ("u_i_retro", "retro"):
+                            pr.u_i_retro = float(patch.value)
+                        elif sf in ("mod", "u_o.mod"):
+                            if patch.vec_index is None:
+                                raise ValueError("mod patch requires vec_index")
+                            if not (0 <= patch.vec_index < pr.u_o.mod.shape[0]):
+                                raise IndexError("mod vec_index out of range")
+                            pr.u_o.mod[patch.vec_index] = float(patch.value)
+                        else:
+                            raise KeyError(f"unknown presynaptic subfield: {patch.subfield}")
+                        applied.append(
+                            {
+                                "field": patch.field,
+                                "index": patch.index,
+                                "subfield": patch.subfield,
+                                "vec_index": patch.vec_index,
+                            }
+                        )
+                    elif patch.field in _NEURON_SCALAR_FIELDS:
                         caster = _NEURON_SCALAR_FIELDS[patch.field]
                         setattr(params, patch.field, caster(patch.value))
                         applied.append({"field": patch.field})

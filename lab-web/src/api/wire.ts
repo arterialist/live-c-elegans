@@ -1,6 +1,6 @@
 /** WebSocket wire decode helpers, mirroring ``lab/wire.py``. */
 
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 export const NEURAL_INT_SCALE = 1e4;
 export const JOINT_INT_SCALE = 1e4;
 export const MUSCLE_INT_SCALE = 1e4;
@@ -14,19 +14,25 @@ export function decodeScaled(values: number[], scale: number): Float32Array {
   return out;
 }
 
+/** Wire v5: ``sm`` is flat ``[x0,y0,z0, x1,y1,z1, …]`` in nm ints → mm floats. */
 export function decodeSegmentsMm(sm: number[]): Float32Array {
-  const n = Math.floor(sm.length / 2);
-  const out = new Float32Array(n * 2);
+  const n = Math.floor(sm.length / 3);
+  const out = new Float32Array(n * 3);
   const inv = 1 / MM_INT_SCALE;
   for (let i = 0; i < n; i++) {
-    out[i * 2] = sm[i * 2] * inv;
-    out[i * 2 + 1] = sm[i * 2 + 1] * inv;
+    out[i * 3] = sm[i * 3] * inv;
+    out[i * 3 + 1] = sm[i * 3 + 1] * inv;
+    out[i * 3 + 2] = sm[i * 3 + 2] * inv;
   }
   return out;
 }
 
-export function decodeComMm(cm: number[]): [number, number] {
-  return [cm[0] / MM_INT_SCALE, cm[1] / MM_INT_SCALE];
+export function decodeComMm(cm: number[]): [number, number, number] {
+  return [
+    cm[0] / MM_INT_SCALE,
+    cm[1] / MM_INT_SCALE,
+    cm[2] / MM_INT_SCALE,
+  ];
 }
 
 export function decodeFiredBits(b64: string, n: number): Uint8Array {

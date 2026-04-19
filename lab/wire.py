@@ -11,7 +11,7 @@ import base64
 import math
 from typing import Any, Iterable
 
-PROTOCOL_VERSION = 4
+PROTOCOL_VERSION = 5
 WIRE_FLOAT_SIG_DIGITS = 10
 WIRE_SEGMENT_SIG_DIGITS = 6
 NEURAL_INT_SCALE = 1e4

@@ -2,17 +2,20 @@ import { useEffect, useRef, useState } from "react";
 import { clsx } from "clsx";
 import { TabShell } from "./TabShell";
 import { useConnectomeStore } from "../../state/connectome";
-import { NeuronMap } from "../NeuronMap";
+import { NeuronMap, type ConnectomeClassHighlight } from "../NeuronMap";
 import { NeuronTable } from "../NeuronTable";
 import { NeuronInspector } from "../NeuronInspector";
 import { GuideButton, type GuideContent } from "../ui/GuideModal";
+import { useAppSettings } from "../../state/app-settings";
+import { ConnectomePaulaGuide } from "./ConnectomePaulaGuide";
 
-type SubTab = "wysiwyg" | "table" | "inspector";
+type SubTab = "wysiwyg" | "table" | "inspector" | "guide";
 
 const SUB_TABS: { id: SubTab; label: string }[] = [
   { id: "wysiwyg", label: "WYSIWYG" },
   { id: "table", label: "Table" },
   { id: "inspector", label: "Inspector" },
+  { id: "guide", label: "Guide" },
 ];
 
 export function ConnectomeTab() {
@@ -24,6 +27,14 @@ export function ConnectomeTab() {
   const selected = useConnectomeStore((s) => s.selected);
   const [showEdges, setShowEdges] = useState(true);
   const [edgeAlpha, setEdgeAlpha] = useState(0.15);
+  const connectomeNeuronScale = useAppSettings((s) => s.connectomeNeuronScale);
+  const setApp = useAppSettings((s) => s.set);
+  const [highlightClass, setHighlightClass] =
+    useState<ConnectomeClassHighlight>(null);
+
+  const toggleClassHighlight = (c: Exclude<ConnectomeClassHighlight, null>) => {
+    setHighlightClass((h) => (h === c ? null : c));
+  };
 
   useEffect(() => {
     if (neurons.length === 0 && !loading) void load();
@@ -42,7 +53,11 @@ export function ConnectomeTab() {
   return (
     <TabShell
       title="Connectome"
-      subtitle="Body-aligned 2D view; click a neuron in the map or table to inspect."
+      subtitle={
+        sub === "guide"
+          ? "PAULA parameters, state, synapses, and tick phases — distilled from in-repo docs."
+          : "Body-aligned 2D view; click a neuron in the map or table to inspect."
+      }
     >
       <div className="flex h-full flex-col gap-3">
         <div className="flex items-center justify-between gap-4">
@@ -83,7 +98,7 @@ export function ConnectomeTab() {
         <div className="min-h-0 flex-1">
           {sub === "wysiwyg" && (
             <div className="flex h-full flex-col gap-2">
-              <div className="flex items-center gap-4 rounded-md bg-zinc-900/40 px-3 py-2 text-xs text-zinc-400">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-md bg-zinc-900/40 px-3 py-2 text-xs text-zinc-400">
                 <label className="flex items-center gap-2">
                   <input
                     type="checkbox"
@@ -110,14 +125,60 @@ export function ConnectomeTab() {
                   </span>
                   <GuideButton title="Edge opacity (α)" guide={GUIDE_EDGE_ALPHA} />
                 </div>
-                <div className="ml-auto flex items-center gap-3 text-[11px]">
-                  <Swatch cls="s" label="sensory" />
-                  <Swatch cls="i" label="interneuron" />
-                  <Swatch cls="m" label="motor" />
+                <div className="flex items-center gap-2">
+                  <span>neuron size</span>
+                  <input
+                    type="range"
+                    min={1}
+                    max={2}
+                    step={0.05}
+                    value={connectomeNeuronScale}
+                    onChange={(e) =>
+                      setApp(
+                        "connectomeNeuronScale",
+                        parseFloat(e.target.value),
+                      )
+                    }
+                    className="h-1 w-28 cursor-pointer accent-accent"
+                  />
+                  <span className="w-10 font-mono tabular-nums">
+                    {connectomeNeuronScale.toFixed(2)}×
+                  </span>
+                  <GuideButton
+                    title="Neuron dot size"
+                    guide={GUIDE_NEURON_SIZE}
+                  />
+                </div>
+                <div className="ml-auto flex flex-wrap items-center gap-2 text-[11px]">
+                  <span className="text-zinc-500">Legend</span>
+                  <Swatch
+                    cls="s"
+                    label="sensory"
+                    active={highlightClass === "s"}
+                    onToggle={() => toggleClassHighlight("s")}
+                  />
+                  <Swatch
+                    cls="i"
+                    label="interneuron"
+                    active={highlightClass === "i"}
+                    onToggle={() => toggleClassHighlight("i")}
+                  />
+                  <Swatch
+                    cls="m"
+                    label="motor"
+                    active={highlightClass === "m"}
+                    onToggle={() => toggleClassHighlight("m")}
+                  />
+                  <GuideButton title="Class highlight" guide={GUIDE_CLASS_HIGHLIGHT} />
                 </div>
               </div>
               <div className="min-h-0 flex-1">
-                <NeuronMap showEdges={showEdges} edgeOpacity={edgeAlpha} />
+                <NeuronMap
+                  showEdges={showEdges}
+                  edgeOpacity={edgeAlpha}
+                  neuronScale={connectomeNeuronScale}
+                  highlightClass={highlightClass}
+                />
               </div>
             </div>
           )}
@@ -129,6 +190,11 @@ export function ConnectomeTab() {
           {sub === "inspector" && (
             <div className="h-full overflow-auto pr-1">
               <NeuronInspector />
+            </div>
+          )}
+          {sub === "guide" && (
+            <div className="h-full min-h-0">
+              <ConnectomePaulaGuide />
             </div>
           )}
         </div>
@@ -148,6 +214,28 @@ const GUIDE_SHOW_EDGES: GuideContent = {
     {
       heading: "When to show edges",
       body: "Useful when you are inspecting motor-interneuron-sensory layering, tracing a specific partner of the selected neuron, or sanity-checking symmetry after a connectome edit.",
+    },
+  ],
+};
+
+const GUIDE_CLASS_HIGHLIGHT: GuideContent = {
+  summary:
+    "Click a legend class (sensory, interneuron, or motor) to dim every other neuron to half opacity so that group reads as a whole. Click the same label again to clear.",
+  sections: [
+    {
+      heading: "Notes",
+      body: "Only affects the WYSIWYG map; it does not filter the table or inspector. Unknown-class neurons dim whenever a filter is on.",
+    },
+  ],
+};
+
+const GUIDE_NEURON_SIZE: GuideContent = {
+  summary:
+    "Scales the radius of neuron disks on the WYSIWYG map from the default (1×) up to double size (2×) for dense layouts or high-DPI screens.",
+  sections: [
+    {
+      heading: "Notes",
+      body: "Only affects rendering and click hit targets; the underlying layout and connectome data are unchanged. The setting is saved with other app preferences.",
     },
   ],
 };
@@ -182,7 +270,17 @@ const GUIDE_EDGE_ALPHA: GuideContent = {
   ],
 };
 
-function Swatch({ cls, label }: { cls: "s" | "i" | "m"; label: string }) {
+function Swatch({
+  cls,
+  label,
+  active,
+  onToggle,
+}: {
+  cls: "s" | "i" | "m";
+  label: string;
+  active: boolean;
+  onToggle: () => void;
+}) {
   const color =
     cls === "s"
       ? "hsl(190 70% 70%)"
@@ -190,12 +288,23 @@ function Swatch({ cls, label }: { cls: "s" | "i" | "m"; label: string }) {
         ? "hsl(265 60% 72%)"
         : "hsl(25 80% 65%)";
   return (
-    <span className="flex items-center gap-1.5">
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={active}
+      title={`${active ? "Clear" : "Highlight only"} ${label} neurons on the map`}
+      className={clsx(
+        "flex items-center gap-1.5 rounded-md px-1.5 py-1 transition",
+        "ring-1 ring-transparent hover:bg-zinc-800/80 hover:text-zinc-200",
+        active && "bg-zinc-800/90 ring-accent/60 text-zinc-100",
+      )}
+    >
       <span
-        className="inline-block size-2.5 rounded-full"
+        className="inline-block size-2.5 shrink-0 rounded-full"
         style={{ background: color }}
+        aria-hidden
       />
       {label}
-    </span>
+    </button>
   );
 }

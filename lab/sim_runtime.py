@@ -7,6 +7,8 @@ Owned by a single background thread. Differs from the demo ``SimRuntime``:
   can be applied safely between ticks.
 * Snapshots expose joint angles / velocities, contact forces, muscle
   activations, free-energy samples, and neuromod levels.
+* Optional wall-clock pacing (see ``pacing_snapshot`` / ``set_pacing``):
+  minimum real ms per physics step and per neural sub-tick (``0`` = no cap).
 """
 
 from __future__ import annotations
@@ -46,7 +48,7 @@ class LatestFrame:
 
     tick: int = 0
     running: bool = True
-    # Body
+    # Body (mm): COM is [cx, cy, cz]; each segment is [x, y, z] (wire v5 triplets).
     com_mm: list[float] = field(default_factory=list)
     segments_mm: list[list[float]] = field(default_factory=list)
     # Neurons (paula_id order)
@@ -98,6 +100,9 @@ class LabSimRuntime:
         self._running_flag.set()
         self._latest_lock = threading.Lock()
         self._latest: LatestFrame = LatestFrame()
+        # Wall-clock pacing (0 = no extra delay — run as fast as the CPU allows).
+        self._real_ms_per_physics_step: float = 0.0
+        self._real_ms_per_neural_tick: float = 0.0
 
         # Cached body / neuron ordering for wire encoding.
         ns0 = self.engine.nervous_system
@@ -114,6 +119,35 @@ class LabSimRuntime:
             "touch_ant_sensor",
             "touch_post_sensor",
         ]
+        self.engine.real_ms_per_neural_tick = float(self._real_ms_per_neural_tick)
+
+    # ------------------------------------------------------------------
+    # Wall-clock pacing (live lab)
+    # ------------------------------------------------------------------
+
+    def pacing_snapshot(self) -> dict[str, float]:
+        with self._sim_lock:
+            return {
+                "real_ms_per_physics_step": float(self._real_ms_per_physics_step),
+                "real_ms_per_neural_tick": float(self._real_ms_per_neural_tick),
+            }
+
+    def set_pacing(
+        self,
+        *,
+        real_ms_per_physics_step: float | None = None,
+        real_ms_per_neural_tick: float | None = None,
+    ) -> dict[str, float]:
+        with self._sim_lock:
+            if real_ms_per_physics_step is not None:
+                self._real_ms_per_physics_step = max(0.0, float(real_ms_per_physics_step))
+            if real_ms_per_neural_tick is not None:
+                self._real_ms_per_neural_tick = max(0.0, float(real_ms_per_neural_tick))
+                self.engine.real_ms_per_neural_tick = float(self._real_ms_per_neural_tick)
+            return {
+                "real_ms_per_physics_step": float(self._real_ms_per_physics_step),
+                "real_ms_per_neural_tick": float(self._real_ms_per_neural_tick),
+            }
 
     # ------------------------------------------------------------------
     # Transport
@@ -206,6 +240,9 @@ class LabSimRuntime:
             self._latest.running = False
 
     def _build_frame(self) -> LatestFrame:
+        phy_target_ms = float(self._real_ms_per_physics_step)
+        self.engine.real_ms_per_neural_tick = float(self._real_ms_per_neural_tick)
+        t_wall0 = time.perf_counter()
         step = self.engine.step()
         body = self.engine.body
         ns = self.engine.nervous_system
@@ -214,13 +251,21 @@ class LabSimRuntime:
 
         bs = step.body_state
         com = bs.position
-        com_mm = [float(com[0] * 1000.0), float(com[1] * 1000.0)]
+        com_mm = [
+            float(com[0] * 1000.0),
+            float(com[1] * 1000.0),
+            float(com[2] * 1000.0),
+        ]
 
         segments_mm: list[list[float]] = []
         shape = body.get_body_shape()
         for i in range(min(N_BODY_SEGMENTS, shape.shape[0])):
             segments_mm.append(
-                [float(shape[i, 0] * 1000.0), float(shape[i, 1] * 1000.0)]
+                [
+                    float(shape[i, 0] * 1000.0),
+                    float(shape[i, 1] * 1000.0),
+                    float(shape[i, 2] * 1000.0),
+                ]
             )
 
         # Neurons
@@ -260,6 +305,12 @@ class LabSimRuntime:
         fe_val = 0.0
         if self.loop.log_free_energy and self.loop.free_energy_trace.prediction_error:
             fe_val = float(self.loop.free_energy_trace.prediction_error[-1])
+
+        if phy_target_ms > 0.0:
+            elapsed_s = time.perf_counter() - t_wall0
+            remain_s = phy_target_ms / 1000.0 - elapsed_s
+            if remain_s > 0.0:
+                time.sleep(remain_s)
 
         return LatestFrame(
             tick=int(step.tick),

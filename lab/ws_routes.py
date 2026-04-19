@@ -46,7 +46,7 @@ def _hello_payload(runtime: LabSimRuntime) -> dict[str, Any]:
     return {
         "p": wire.PROTOCOL_VERSION,
         "t": "h",
-        "m": "lab v1: ja,jv,tc,ma,nm01,fe,z; Si,Ri,Bi,Trefi÷1e4; Fb bits",
+        "m": "lab v5: sm xyz×N seg, cm xyz; ja,jv,tc,ma,nm01,fe,z; Si,Ri,Bi,Trefi÷1e4; Fb bits",
         "L": {"nm": names, "ax": ax, "ay": ay},
         "M": meta,
         "L_body": {
@@ -63,13 +63,23 @@ def _state_payload(runtime: LabSimRuntime) -> dict[str, Any] | None:
         return None
     sm: list[int] = []
     for row in frame.segments_mm:
-        sm.extend([wire.mm_to_nm_int(row[0]), wire.mm_to_nm_int(row[1])])
+        sm.extend(
+            [
+                wire.mm_to_nm_int(row[0]),
+                wire.mm_to_nm_int(row[1]),
+                wire.mm_to_nm_int(row[2]),
+            ]
+        )
     out: dict[str, Any] = {
         "p": wire.PROTOCOL_VERSION,
         "t": "s",
         "k": int(frame.tick),
         "sm": sm,
-        "cm": [wire.mm_to_nm_int(frame.com_mm[0]), wire.mm_to_nm_int(frame.com_mm[1])],
+        "cm": [
+            wire.mm_to_nm_int(frame.com_mm[0]),
+            wire.mm_to_nm_int(frame.com_mm[1]),
+            wire.mm_to_nm_int(frame.com_mm[2]),
+        ],
         "Si": wire.scaled_int(frame.neuron_s, scale=wire.NEURAL_INT_SCALE),
         "Ri": wire.scaled_int(frame.neuron_r, scale=wire.NEURAL_INT_SCALE),
         "Bi": wire.scaled_int(frame.neuron_b, scale=wire.NEURAL_INT_SCALE),

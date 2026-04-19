@@ -23,6 +23,25 @@ export async function setTransport(action: TransportAction): Promise<TransportSt
   return r.data;
 }
 
+/** Wall-clock pacing: ``0`` = no added delay (run as fast as the CPU allows). */
+export interface SimPacing {
+  real_ms_per_physics_step: number;
+  real_ms_per_neural_tick: number;
+}
+
+export async function getPacing(): Promise<SimPacing> {
+  const r = await http.get<SimPacing>("/sim/pacing");
+  return r.data;
+}
+
+export async function setPacing(patch: {
+  real_ms_per_physics_step?: number;
+  real_ms_per_neural_tick?: number;
+}): Promise<SimPacing> {
+  const r = await http.post<SimPacing>("/sim/pacing", patch);
+  return r.data;
+}
+
 export interface ParameterSpec {
   path: string;
   label: string;
@@ -72,6 +91,24 @@ export async function getConnectome(): Promise<{ neurons: NeuronInfo[]; edges: E
   return r.data;
 }
 
+export interface NeuronPostsynapticView {
+  id: number;
+  pre_paula_id: number | null;
+  pre_terminal: number | null;
+  pre_name: string | null;
+  info: number;
+  plast: number;
+  adapt: number[];
+  potential: number;
+}
+
+export interface NeuronPresynapticView {
+  id: number;
+  u_o_info: number;
+  u_o_mod: number[];
+  u_i_retro: number;
+}
+
 export interface NeuronDetail {
   name: string;
   paula_id: number;
@@ -80,8 +117,12 @@ export interface NeuronDetail {
   r: number;
   b: number;
   t_ref: number;
+  F_avg: number;
+  t_last_fire: number;
   M_vector: number[];
   pq_len: number;
+  postsynaptic: NeuronPostsynapticView[];
+  presynaptic: NeuronPresynapticView[];
   params: {
     r_base: number;
     b_base: number;
@@ -110,6 +151,8 @@ export interface NeuronFieldPatch {
   field: string;
   value: unknown;
   index?: number;
+  subfield?: string;
+  vec_index?: number;
 }
 
 export async function patchNeuron(

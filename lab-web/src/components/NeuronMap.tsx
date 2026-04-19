@@ -4,12 +4,23 @@ import { useConnectomeStore } from "../state/connectome";
 import { useLabStore } from "../state/store";
 
 /** Body-aligned WYSIWYG view of the 302-neuron connectome. */
+const BASE_RADIUS = 2.5;
+const BASE_RADIUS_SELECTED = 5;
+
+export type ConnectomeClassHighlight = "s" | "m" | "i" | null;
+
 export function NeuronMap({
   showEdges,
   edgeOpacity,
+  neuronScale,
+  highlightClass,
 }: {
   showEdges: boolean;
   edgeOpacity: number;
+  /** 1 = default radii; up to 2 doubles dot size for readability. */
+  neuronScale: number;
+  /** When set, other classes render at half opacity for quick visual grouping. */
+  highlightClass: ConnectomeClassHighlight;
 }) {
   const neurons = useConnectomeStore((s) => s.neurons);
   const edges = useConnectomeStore((s) => s.edges);
@@ -104,19 +115,22 @@ export function NeuronMap({
       }
 
       // Neuron nodes.
+      const scale = Math.min(2, Math.max(1, neuronScale));
       for (const p of points) {
         const [px, py] = toPx(p.x, p.y);
         const idx = p.paulaIdx ?? p.id;
         const f = fired ? fired[idx] : 0;
         const s = S ? S[idx] : 0;
-        const color = fillFor(p.cls, s, f);
+        const color = fillFor(p.cls, s, f, highlightClass);
+        const r =
+          (p.name === selected ? BASE_RADIUS_SELECTED : BASE_RADIUS) * scale;
         ctx.fillStyle = color;
         ctx.beginPath();
-        ctx.arc(px, py, p.name === selected ? 5 : 2.5, 0, Math.PI * 2);
+        ctx.arc(px, py, r, 0, Math.PI * 2);
         ctx.fill();
         if (p.name === selected) {
           ctx.strokeStyle = "oklch(0.85 0.2 265)";
-          ctx.lineWidth = 1.5;
+          ctx.lineWidth = 1.5 * scale;
           ctx.stroke();
         }
       }
@@ -125,7 +139,16 @@ export function NeuronMap({
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
-  }, [neurons.length, points, edges, showEdges, edgeOpacity, selected]);
+  }, [
+    neurons.length,
+    points,
+    edges,
+    showEdges,
+    edgeOpacity,
+    neuronScale,
+    highlightClass,
+    selected,
+  ]);
 
   return (
     <div
@@ -140,14 +163,20 @@ export function NeuronMap({
         const pad = 20;
         const innerW = rect.width - pad * 2;
         const innerH = rect.height - pad * 2;
+        const scale = Math.min(2, Math.max(1, neuronScale));
         let best: { name: string; d2: number } | null = null;
         for (const p of points) {
           const nx = pad + ((p.x + 1) / 2) * innerW;
           const ny = pad + ((p.y + 1) / 2) * innerH;
           const d2 = (nx - px) ** 2 + (ny - py) ** 2;
+          const hitR =
+            (p.name === selected ? BASE_RADIUS_SELECTED : BASE_RADIUS) *
+              scale +
+            6;
+          if (d2 > hitR ** 2) continue;
           if (!best || d2 < best.d2) best = { name: p.name, d2 };
         }
-        if (best && best.d2 < 25 ** 2) {
+        if (best) {
           select(best.name);
         }
       }}
@@ -165,7 +194,12 @@ export function NeuronMap({
   );
 }
 
-function fillFor(cls: "s" | "m" | "i" | "u", S: number, fired: number): string {
+function fillFor(
+  cls: "s" | "m" | "i" | "u",
+  S: number,
+  fired: number,
+  highlight: ConnectomeClassHighlight,
+): string {
   const base =
     cls === "s"
       ? "190 70% 70%"
@@ -174,8 +208,15 @@ function fillFor(cls: "s" | "m" | "i" | "u", S: number, fired: number): string {
         : cls === "i"
           ? "265 60% 72%"
           : "0 0% 50%";
-  if (fired) return `hsl(${base.split(" ")[0]} 90% 88%)`;
-  // Use S (clamped to [0,2]) as alpha gradient.
-  const alpha = Math.max(0.25, Math.min(1.0, 0.25 + Math.abs(S) * 0.5));
+  const hueToken = base.split(" ")[0]!;
+  const opacityMul =
+    highlight !== null && cls !== highlight ? 0.5 : 1;
+
+  if (fired) {
+    const a = Math.min(1, 0.95 * opacityMul);
+    return `hsl(${hueToken} 90% 88% / ${a})`;
+  }
+  const alpha =
+    Math.max(0.25, Math.min(1.0, 0.25 + Math.abs(S) * 0.5)) * opacityMul;
   return `hsl(${base} / ${alpha})`;
 }

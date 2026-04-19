@@ -121,7 +121,7 @@ def build_app(
 def main() -> None:
     parser = argparse.ArgumentParser(description="C. elegans virtual lab server")
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--port", type=int, default=8811)
     parser.add_argument("--broadcast-hz", type=float, default=60.0)
     parser.add_argument("--body-settle-steps", type=int, default=None)
     parser.add_argument(
