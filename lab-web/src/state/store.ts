@@ -2,6 +2,7 @@ import { create } from "zustand";
 import {
   decodeComMm,
   decodeFiredBits,
+  decodePerNeuronScaled,
   decodeScaled,
   decodeSegmentsMm,
   JOINT_INT_SCALE,
@@ -44,6 +45,10 @@ export interface StateFrame {
   tc: Float32Array;
   ma: Float32Array;
   neuromod: [number, number];
+  /** Per-neuron ``M_vector[0]`` (paula index), wire ``M0i``. */
+  neuronM0: Float32Array;
+  /** Per-neuron ``M_vector[1]`` (paula index), wire ``M1i``. */
+  neuronM1: Float32Array;
   fe: number;
 }
 
@@ -95,6 +100,8 @@ export function decodeMessage(
         Number((obj.nm01 as number[])[0]),
         Number((obj.nm01 as number[])[1]),
       ],
+      neuronM0: decodePerNeuronScaled(obj.M0i, ctx.nNeurons, NEURAL_INT_SCALE),
+      neuronM1: decodePerNeuronScaled(obj.M1i, ctx.nNeurons, NEURAL_INT_SCALE),
       fe: Number(obj.fe),
     };
     return { state };

@@ -2,7 +2,8 @@
 
 Kept separate from the demo server's inline helpers so the lab can evolve the
 wire format independently (adds ``Bi``, ``Trefi``, ``ja``, ``jv``, ``tc``,
-``ma``, ``nm01``, ``fe``, ``z``) while reusing the same quantization rules.
+``ma``, ``nm01``, ``M0i``, ``M1i`` per-neuron M_vector components, ``fe``,
+``z``) while reusing the same quantization rules.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ import base64
 import math
 from typing import Any, Iterable
 
-PROTOCOL_VERSION = 5
+PROTOCOL_VERSION = 6
 WIRE_FLOAT_SIG_DIGITS = 10
 WIRE_SEGMENT_SIG_DIGITS = 6
 NEURAL_INT_SCALE = 1e4

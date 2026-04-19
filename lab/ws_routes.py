@@ -46,7 +46,7 @@ def _hello_payload(runtime: LabSimRuntime) -> dict[str, Any]:
     return {
         "p": wire.PROTOCOL_VERSION,
         "t": "h",
-        "m": "lab v5: sm xyz×N seg, cm xyz; ja,jv,tc,ma,nm01,fe,z; Si,Ri,Bi,Trefi÷1e4; Fb bits",
+        "m": "lab v6: +M0i,M1i per-neuron M_vector[0,1]÷1e4; sm xyz×N seg, cm xyz; ja,jv,tc,ma,nm01,fe,z; Si,Ri,Bi,Trefi÷1e4; Fb bits",
         "L": {"nm": names, "ax": ax, "ay": ay},
         "M": meta,
         "L_body": {
@@ -90,6 +90,8 @@ def _state_payload(runtime: LabSimRuntime) -> dict[str, Any] | None:
         "tc": wire.scaled_int(frame.touch_forces, scale=wire.TOUCH_INT_SCALE),
         "ma": wire.scaled_int(frame.muscle_activations, scale=wire.MUSCLE_INT_SCALE),
         "nm01": [wire.wire_float(frame.neuromod[0]), wire.wire_float(frame.neuromod[1])],
+        "M0i": wire.scaled_int(frame.neuron_m0, scale=wire.NEURAL_INT_SCALE),
+        "M1i": wire.scaled_int(frame.neuron_m1, scale=wire.NEURAL_INT_SCALE),
         "fe": wire.wire_float(frame.free_energy),
     }
     if not frame.running:

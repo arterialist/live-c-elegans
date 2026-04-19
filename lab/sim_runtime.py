@@ -64,6 +64,9 @@ class LatestFrame:
     touch_forces: list[float] = field(default_factory=list)
     # Muscles (order == body.muscle_names)
     muscle_activations: list[float] = field(default_factory=list)
+    # Per-neuron M_vector[0] / M_vector[1] (paula_id order, same length as neuron_s)
+    neuron_m0: list[float] = field(default_factory=list)
+    neuron_m1: list[float] = field(default_factory=list)
     # Neuromodulators
     neuromod: tuple[float, float] = (0.0, 0.0)
     # Free-energy proxy
@@ -270,6 +273,7 @@ class LabSimRuntime:
 
         # Neurons
         s_list, r_list, b_list, tref_list, f_list = self._neuron_arrays(ns)
+        m0_list, m1_list = self._neuron_m01_arrays(ns)
 
         # Joints
         ja = [float(bs.joint_angles.get(n, 0.0)) for n in self.joint_names]
@@ -326,6 +330,8 @@ class LabSimRuntime:
             joint_velocities=jv,
             touch_forces=tc,
             muscle_activations=ma,
+            neuron_m0=m0_list,
+            neuron_m1=m1_list,
             neuromod=(float(m0), float(m1)),
             free_energy=fe_val,
         )
@@ -358,6 +364,36 @@ class LabSimRuntime:
                 f_out[ii] = 1 if float(neuron.O) > 0 else 0
         return s_out, r_out, b_out, tref_out, f_out
 
+    @staticmethod
+    def _neuron_m01_arrays(ns: CElegansNervousSystem) -> tuple[list[float], list[float]]:
+        """Parallel M_vector[0], M_vector[1] in paula_id order (same indexing as S)."""
+        if ns._network is None:  # type: ignore[attr-defined]
+            return [], []
+        neurons = ns._network.network.neurons  # type: ignore[attr-defined]
+        if not neurons:
+            return [], []
+        ids = sorted(neurons.keys(), key=int)
+        n = int(ids[-1]) + 1
+        m0_out = [0.0] * n
+        m1_out = [0.0] * n
+        for i in ids:
+            neuron = neurons[i]
+            ii = int(i)
+            if not (0 <= ii < n):
+                continue
+            mvec = getattr(neuron, "M_vector", None)
+            if mvec is None:
+                continue
+            try:
+                arr = np.asarray(mvec, dtype=float).reshape(-1)
+            except (TypeError, ValueError):
+                continue
+            if arr.size >= 1:
+                m0_out[ii] = float(arr[0])
+            if arr.size >= 2:
+                m1_out[ii] = float(arr[1])
+        return m0_out, m1_out
+
     # ------------------------------------------------------------------
     # Broadcast API
 
@@ -380,6 +416,8 @@ class LabSimRuntime:
                 joint_velocities=list(self._latest.joint_velocities),
                 touch_forces=list(self._latest.touch_forces),
                 muscle_activations=list(self._latest.muscle_activations),
+                neuron_m0=list(self._latest.neuron_m0),
+                neuron_m1=list(self._latest.neuron_m1),
                 neuromod=self._latest.neuromod,
                 free_energy=self._latest.free_energy,
             )

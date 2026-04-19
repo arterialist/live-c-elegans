@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { clsx } from "clsx";
 import { useConnectomeStore } from "../state/connectome";
 import { useLabStore } from "../state/store";
@@ -6,6 +6,9 @@ import { useLabStore } from "../state/store";
 /** Body-aligned WYSIWYG view of the 302-neuron connectome. */
 const BASE_RADIUS = 2.5;
 const BASE_RADIUS_SELECTED = 5;
+const PAD = 20;
+const ZOOM_MIN = 0.35;
+const ZOOM_MAX = 12;
 
 export type ConnectomeClassHighlight = "s" | "m" | "i" | null;
 
@@ -30,12 +33,29 @@ export function NeuronMap({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const hostRef = useRef<HTMLDivElement | null>(null);
 
+  /** View center in normalized plot space; zoom scales offset from this point. */
+  const viewCxRef = useRef(0);
+  const viewCyRef = useRef(0);
+  const viewZRef = useRef(1);
+  /** Shift+drag pan */
+  const panRef = useRef<{
+    pointerId: number;
+    lastX: number;
+    lastY: number;
+  } | null>(null);
+
   // Name → paula_id once hello is in.
   const idxOf = useMemo(() => {
     const m = new Map<string, number>();
     helloNames.forEach((n, i) => m.set(n, i));
     return m;
   }, [helloNames]);
+
+  const selectedId = useMemo(() => {
+    if (!selected) return null;
+    const n = neurons.find((x) => x.name === selected);
+    return n?.id ?? null;
+  }, [neurons, selected]);
 
   // Transform: map body coords x=[0..1], y=[-0.8..0.8] into [-1..1] x [-1..1].
   const points = useMemo(
@@ -49,6 +69,26 @@ export function NeuronMap({
         paulaIdx: idxOf.get(n.name),
       })),
     [neurons, idxOf],
+  );
+
+  const dataToClient = useCallback(
+    (
+      x: number,
+      y: number,
+      innerW: number,
+      innerH: number,
+    ): [number, number] => {
+      const cx = viewCxRef.current;
+      const cy = viewCyRef.current;
+      const z = viewZRef.current;
+      const un = cx + (x - cx) * z;
+      const vn = cy + (y - cy) * z;
+      return [
+        PAD + ((un + 1) / 2) * innerW,
+        PAD + ((vn + 1) / 2) * innerH,
+      ];
+    },
+    [],
   );
 
   // Animate; pull latest state directly (avoid re-rendering whole tree).
@@ -78,14 +118,9 @@ export function NeuronMap({
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
 
-      // Transform: body coords → pixels. Pad 10% and keep aspect.
-      const pad = 20;
-      const innerW = w - pad * 2;
-      const innerH = h - pad * 2;
-      const toPx = (x: number, y: number) => [
-        pad + ((x + 1) / 2) * innerW,
-        pad + ((y + 1) / 2) * innerH,
-      ];
+      const innerW = w - PAD * 2;
+      const innerH = h - PAD * 2;
+      const toPx = (x: number, y: number) => dataToClient(x, y, innerW, innerH);
 
       // Body centerline.
       ctx.strokeStyle = "rgba(120,120,140,0.25)";
@@ -97,21 +132,58 @@ export function NeuronMap({
       ctx.lineTo(x1, y1);
       ctx.stroke();
 
-      // Edges (optional).
+      const sid = selectedId;
+
+      // Edges (optional): dim non-neighbours; emphasize edges incident to selection.
       if (showEdges && edges.length && edgeOpacity > 0) {
-        ctx.strokeStyle = `rgba(86, 110, 140, ${edgeOpacity})`;
-        ctx.lineWidth = 0.5;
-        ctx.beginPath();
-        for (const e of edges) {
-          const a = points[e.pre_id];
-          const b = points[e.post_id];
-          if (!a || !b) continue;
-          const [ax, ay] = toPx(a.x, a.y);
-          const [bx, by] = toPx(b.x, b.y);
-          ctx.moveTo(ax, ay);
-          ctx.lineTo(bx, by);
+        const dimAlpha = edgeOpacity * 0.28;
+        const baseRgb = "86, 110, 140";
+
+        if (sid != null) {
+          ctx.strokeStyle = `rgba(${baseRgb},${dimAlpha})`;
+          ctx.lineWidth = 0.45;
+          ctx.beginPath();
+          for (const e of edges) {
+            if (e.pre_id === sid || e.post_id === sid) continue;
+            const a = points[e.pre_id];
+            const b = points[e.post_id];
+            if (!a || !b) continue;
+            const [ax, ay] = toPx(a.x, a.y);
+            const [bx, by] = toPx(b.x, b.y);
+            ctx.moveTo(ax, ay);
+            ctx.lineTo(bx, by);
+          }
+          ctx.stroke();
+
+          ctx.strokeStyle = `rgba(180, 220, 255, ${Math.min(1, edgeOpacity * 2.2 + 0.35)})`;
+          ctx.lineWidth = 1.35;
+          ctx.beginPath();
+          for (const e of edges) {
+            if (e.pre_id !== sid && e.post_id !== sid) continue;
+            const a = points[e.pre_id];
+            const b = points[e.post_id];
+            if (!a || !b) continue;
+            const [ax, ay] = toPx(a.x, a.y);
+            const [bx, by] = toPx(b.x, b.y);
+            ctx.moveTo(ax, ay);
+            ctx.lineTo(bx, by);
+          }
+          ctx.stroke();
+        } else {
+          ctx.strokeStyle = `rgba(${baseRgb},${edgeOpacity})`;
+          ctx.lineWidth = 0.5;
+          ctx.beginPath();
+          for (const e of edges) {
+            const a = points[e.pre_id];
+            const b = points[e.post_id];
+            if (!a || !b) continue;
+            const [ax, ay] = toPx(a.x, a.y);
+            const [bx, by] = toPx(b.x, b.y);
+            ctx.moveTo(ax, ay);
+            ctx.lineTo(bx, by);
+          }
+          ctx.stroke();
         }
-        ctx.stroke();
       }
 
       // Neuron nodes.
@@ -148,47 +220,150 @@ export function NeuronMap({
     neuronScale,
     highlightClass,
     selected,
+    selectedId,
+    dataToClient,
   ]);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+
+    const onWheel = (e: WheelEvent) => {
+      if (!host.contains(e.target as Node)) return;
+      e.preventDefault();
+      const rect = host.getBoundingClientRect();
+      const innerW = rect.width - PAD * 2;
+      const innerH = rect.height - PAD * 2;
+      if (innerW <= 0 || innerH <= 0) return;
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      const u = (mx - PAD) / innerW * 2 - 1;
+      const v = (my - PAD) / innerH * 2 - 1;
+
+      const oldZ = viewZRef.current;
+      const factor = Math.exp(-e.deltaY * 0.0018);
+      const newZ = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, oldZ * factor));
+      if (Math.abs(newZ - oldZ) < 1e-6) return;
+
+      const cx = viewCxRef.current;
+      const cy = viewCyRef.current;
+      const dx = cx + (u - cx) / oldZ;
+      const dy = cy + (v - cy) / oldZ;
+
+      if (Math.abs(1 - newZ) < 1e-5) {
+        viewZRef.current = newZ;
+        return;
+      }
+
+      viewCxRef.current = (u - dx * newZ) / (1 - newZ);
+      viewCyRef.current = (v - dy * newZ) / (1 - newZ);
+      viewZRef.current = newZ;
+
+      const clampC = (t: number) => Math.min(4, Math.max(-4, t));
+      viewCxRef.current = clampC(viewCxRef.current);
+      viewCyRef.current = clampC(viewCyRef.current);
+    };
+
+    host.addEventListener("wheel", onWheel, { passive: false });
+    return () => host.removeEventListener("wheel", onWheel);
+  }, [neurons.length]);
 
   return (
     <div
       ref={hostRef}
-      className="relative h-full min-h-[280px] w-full overflow-hidden rounded-md bg-zinc-950 ring-1 ring-zinc-800"
+      className="relative h-full min-h-[280px] w-full cursor-crosshair overflow-hidden rounded-md bg-zinc-950 ring-1 ring-zinc-800"
       onPointerDown={(e) => {
         const host = hostRef.current;
         if (!host || points.length === 0) return;
+        if (e.shiftKey) {
+          e.preventDefault();
+          try {
+            host.setPointerCapture(e.pointerId);
+          } catch {
+            /* ignore */
+          }
+          panRef.current = {
+            pointerId: e.pointerId,
+            lastX: e.clientX,
+            lastY: e.clientY,
+          };
+          return;
+        }
+
         const rect = host.getBoundingClientRect();
         const px = e.clientX - rect.left;
         const py = e.clientY - rect.top;
-        const pad = 20;
-        const innerW = rect.width - pad * 2;
-        const innerH = rect.height - pad * 2;
+        const innerW = rect.width - PAD * 2;
+        const innerH = rect.height - PAD * 2;
         const scale = Math.min(2, Math.max(1, neuronScale));
         let best: { name: string; d2: number } | null = null;
         for (const p of points) {
-          const nx = pad + ((p.x + 1) / 2) * innerW;
-          const ny = pad + ((p.y + 1) / 2) * innerH;
+          const [nx, ny] = dataToClient(p.x, p.y, innerW, innerH);
           const d2 = (nx - px) ** 2 + (ny - py) ** 2;
           const hitR =
-            (p.name === selected ? BASE_RADIUS_SELECTED : BASE_RADIUS) *
-              scale +
+            (p.name === selected ? BASE_RADIUS_SELECTED : BASE_RADIUS) * scale +
             6;
           if (d2 > hitR ** 2) continue;
           if (!best || d2 < best.d2) best = { name: p.name, d2 };
         }
         if (best) {
-          select(best.name);
+          select(best.name === selected ? null : best.name);
+        } else {
+          select(null);
+        }
+      }}
+      onPointerMove={(e) => {
+        const p = panRef.current;
+        if (!p || p.pointerId !== e.pointerId) return;
+        const host = hostRef.current;
+        if (!host) return;
+        const rect = host.getBoundingClientRect();
+        const innerW = rect.width - PAD * 2;
+        const innerH = rect.height - PAD * 2;
+        const dx = e.clientX - p.lastX;
+        const dy = e.clientY - p.lastY;
+        p.lastX = e.clientX;
+        p.lastY = e.clientY;
+        const z = viewZRef.current;
+        viewCxRef.current -= (dx / innerW) * 2 / z;
+        viewCyRef.current -= (dy / innerH) * 2 / z;
+        viewCxRef.current = Math.min(4, Math.max(-4, viewCxRef.current));
+        viewCyRef.current = Math.min(4, Math.max(-4, viewCyRef.current));
+      }}
+      onPointerUp={(e) => {
+        if (panRef.current?.pointerId === e.pointerId) {
+          panRef.current = null;
+          try {
+            hostRef.current?.releasePointerCapture(e.pointerId);
+          } catch {
+            /* ignore */
+          }
+        }
+      }}
+      onPointerCancel={(e) => {
+        if (panRef.current?.pointerId === e.pointerId) {
+          panRef.current = null;
         }
       }}
     >
-      <canvas ref={canvasRef} className="absolute inset-0" />
+      <canvas ref={canvasRef} className="absolute inset-0 touch-none" />
       <div
         className={clsx(
-          "pointer-events-none absolute right-3 top-2 rounded",
-          "bg-zinc-900/80 px-2 py-1 font-mono text-[10px] text-zinc-400",
+          "pointer-events-none absolute right-3 top-2 max-w-[min(100%,14rem)] rounded",
+          "bg-zinc-900/80 px-2 py-1 font-mono text-[10px] leading-snug text-zinc-400",
         )}
       >
-        {neurons.length} neurons · {edges.length} edges
+        <div>
+          {neurons.length} neurons · {edges.length} edges
+        </div>
+        <div className="mt-0.5 text-zinc-500">
+          Wheel zoom · Shift+drag pan
+          {selectedId != null && showEdges ? (
+            <span className="block text-accent/90">
+              Highlight: edges to/from selected
+            </span>
+          ) : null}
+        </div>
       </div>
     </div>
   );

@@ -1,6 +1,6 @@
 /** WebSocket wire decode helpers, mirroring ``lab/wire.py``. */
 
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 6;
 export const NEURAL_INT_SCALE = 1e4;
 export const JOINT_INT_SCALE = 1e4;
 export const MUSCLE_INT_SCALE = 1e4;
@@ -11,6 +11,20 @@ export function decodeScaled(values: number[], scale: number): Float32Array {
   const out = new Float32Array(values.length);
   const inv = 1 / scale;
   for (let i = 0; i < values.length; i++) out[i] = values[i] * inv;
+  return out;
+}
+
+/** Decode wire int list into a fixed ``n``-neuron row (paula order); pad / trim. */
+export function decodePerNeuronScaled(
+  raw: unknown,
+  n: number,
+  scale: number,
+): Float32Array {
+  const out = new Float32Array(n);
+  if (!Array.isArray(raw) || n <= 0) return out;
+  const inv = 1 / scale;
+  const lim = Math.min(raw.length, n);
+  for (let i = 0; i < lim; i++) out[i] = Number(raw[i]) * inv;
   return out;
 }
 

@@ -163,6 +163,22 @@ export function NeuronInspector() {
     return fireRateRef.current;
   }, [paulaIdx]);
 
+  const sampleNeuronM0 = useCallback(() => {
+    if (paulaIdx < 0) return null;
+    const latest = useLabStore.getState().latest;
+    if (!latest) return null;
+    const row = latest.neuronM0;
+    return row && paulaIdx < row.length ? row[paulaIdx] : null;
+  }, [paulaIdx]);
+
+  const sampleNeuronM1 = useCallback(() => {
+    if (paulaIdx < 0) return null;
+    const latest = useLabStore.getState().latest;
+    if (!latest) return null;
+    const row = latest.neuronM1;
+    return row && paulaIdx < row.length ? row[paulaIdx] : null;
+  }, [paulaIdx]);
+
   const refreshDetail = useCallback(async () => {
     const name = nameRef.current;
     if (!name) return;
@@ -316,35 +332,24 @@ export function NeuronInspector() {
           />
           <div className="mt-2 border-t border-zinc-800 pt-2">
             <div className="mb-1 font-mono text-[10px] uppercase tracking-wide text-zinc-500">
-              Global neuromodulators (wire)
+              Neuron M0 / M1 (wire)
             </div>
             <p className="mb-1.5 text-[10px] leading-snug text-zinc-600">
-              Simulation-wide M0 / M1 from the live stream (same signals as the
-              worm HUD). Distinct from this neuron’s local{" "}
-              <span className="font-mono text-zinc-500">M_vector</span> below.
+              This neuron’s{" "}
+              <span className="font-mono text-zinc-500">M_vector[0]</span> and{" "}
+              <span className="font-mono text-zinc-500">M_vector[1]</span> from the
+              live stream (per-cell state). Global levels are on the sim HUD.
             </p>
             <Sparkline
-              label="M0 stress"
-              sample={() => {
-                const latest = useLabStore.getState().latest;
-                if (!latest) return null;
-                return latest.neuromod[0] ?? null;
-              }}
+              label="M0 (local)"
+              sample={sampleNeuronM0}
               color="oklch(0.8 0.17 30)"
-              min={0}
-              max={1}
               format={(v) => v.toFixed(3)}
             />
             <Sparkline
-              label="M1 reward"
-              sample={() => {
-                const latest = useLabStore.getState().latest;
-                if (!latest) return null;
-                return latest.neuromod[1] ?? null;
-              }}
+              label="M1 (local)"
+              sample={sampleNeuronM1}
               color="oklch(0.8 0.17 140)"
-              min={0}
-              max={1}
               format={(v) => v.toFixed(3)}
             />
           </div>

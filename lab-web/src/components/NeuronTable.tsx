@@ -113,7 +113,9 @@ export function NeuronTable() {
                   "cursor-pointer border-t border-zinc-900/80 hover:bg-zinc-800/40",
                   n.name === selected && "bg-accent/20 text-accent",
                 )}
-                onClick={() => select(n.name)}
+                onClick={() =>
+                  select(selected === n.name ? null : n.name)
+                }
               >
                 <td className="px-2 py-1 text-zinc-100">{n.name}</td>
                 <td className="px-2 py-1 text-zinc-400">{n.type}</td>
