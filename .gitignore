@@ -51,3 +51,9 @@ Thumbs.db
 worm.json
 
 scripts/
+
+node_modules
+dist
+.vite
+*.log
+.DS_Store

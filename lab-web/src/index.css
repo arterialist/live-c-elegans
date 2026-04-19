@@ -1,0 +1,40 @@
+@import "tailwindcss";
+@import "allotment/dist/style.css";
+
+@theme {
+  --color-accent: oklch(0.78 0.18 265);
+  --color-accent-dim: oklch(0.55 0.15 265);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    "Helvetica Neue",
+    Arial,
+    sans-serif;
+}
+
+:root {
+  --focus-outline: 2px solid var(--color-accent);
+  color-scheme: dark;
+}
+
+/* Allotment overrides: dark splitter */
+.split-view-view {
+  background: transparent;
+}
+.sash-container .sash {
+  background-color: oklch(0.3 0 0) !important;
+}
+.sash-container .sash.active,
+.sash-container .sash:hover {
+  background-color: var(--color-accent) !important;
+}
