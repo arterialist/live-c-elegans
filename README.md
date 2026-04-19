@@ -1,8 +1,11 @@
-# C. elegans live WebSocket demo
+# C. elegans live WebSocket demo & virtual lab
 
-Runs the [active-inference](https://github.com/arterialist/active-inference) simulation on your machine and streams state to a static **canvas** page over **WebSockets**. Food add/remove matches the matplotlib interactive viewer (left / right click).
+This package ships **two** ways to drive the same [active-inference](https://github.com/arterialist/active-inference) C. elegans stack (PAULA + MuJoCo):
 
-**Public viewer:** [https://jimmy.arteriali.st](https://jimmy.arteriali.st) (static `web/` build). The browser uses the WebSocket URL from the `ws` query parameter if set, otherwise `DEFAULT_WS_URL` in `web/app.js`—point that constant or `?ws=` at a reachable **`wss://`** server running `celegans-demo-server`.
+1. **Canvas demo** — `celegans-demo-server` streams compact state to the static **`web/`** client (food add/remove matches the matplotlib interactive viewer: left / right click).
+2. **Virtual lab** — `celegans-lab-server` (**`lab/`**) exposes REST + a richer WebSocket protocol; **`lab-web/`** is a React + Vite app for connectome / body / simulation controls, neuron inspector, and staging patches before apply.
+
+**Public viewer (canvas build):** [https://jimmy.arteriali.st](https://jimmy.arteriali.st) (static `web/`). The browser uses the `ws` query parameter if set, otherwise `DEFAULT_WS_URL` in `web/app.js`—point that constant or `?ws=` at a reachable **`wss://`** server running `celegans-demo-server`.
 
 ## Repository layout (local dev)
 
@@ -10,10 +13,17 @@ This package depends on **`active-inference`** as an editable path dependency (`
 
 ```text
 your-workspace/
-  celegans-live-demo/    # this repo
+  celegans-live-demo/    # this repo (includes lab/ + lab-web/)
   active-inference/      # required — editable dep
   neuron-model/          # required — PAULA ([arterialist/neuron-model](https://github.com/arterialist/neuron-model))
 ```
+
+Inside **`celegans-live-demo/`**:
+
+- **`lab/`** — FastAPI lab backend (importable package + `celegans-lab-server` entrypoint).
+- **`lab-web/`** — Vite + React + TypeScript frontend for the lab (see [`lab-web/README.md`](lab-web/README.md)).
+- **`web/`** — static canvas client for the classic demo server.
+- **`celegans_live_demo/`** — asyncio WebSocket server for the canvas demo.
 
 If your PAULA checkout lives under another folder name, symlink or rename it to **`neuron-model`** next to **`active-inference`** so the loader path matches.
 
@@ -21,8 +31,34 @@ If your PAULA checkout lives under another folder name, symlink or rename it to 
 
 - Same environment expectations as `active-inference` (Python 3.11+, MuJoCo, connectome cache after first run).
 - **`neuron-model`** and **`active-inference`** available as above; running only from a lone `celegans-live-demo` clone without those siblings will not satisfy the path dependency or PAULA import path.
+- **Virtual lab:** Node.js 20+ (or current LTS) for `lab-web/` (`npm install` / `npm run dev`).
 
-## Run the server
+## Virtual lab (`celegans-lab-server` + `lab-web/`)
+
+The lab runs a **background simulation thread** (same `LabSimRuntime` / connectome as the canvas demo, without food commands) and serves:
+
+- **REST** under `/api/` — health, connectome, per-neuron detail + patch, body/MuJoCo introspection, parameter schema + live/rebuild patches, simulation transport (play / pause / step), pacing, etc. (see `lab/server.py` docstring and `lab/rest_routes.py`).
+- **WebSocket** `GET /ws/state` — lab wire protocol (v5 compact frames: segment geometry, COM, neural summaries, joints, muscles, neuromods; see `lab/wire.py` and `lab-web/src/api/wire.ts`).
+
+**Run locally** (default API + WS on **8765**; Vite proxies to it in dev):
+
+```bash
+# from celegans-live-demo/
+uv sync
+uv run celegans-lab-server
+```
+
+```bash
+# second terminal — from celegans-live-demo/lab-web/
+npm install
+npm run dev
+```
+
+Then open the URL Vite prints (typically `http://127.0.0.1:5173`). Production build: `npm run build` in `lab-web/`, then serve `lab-web/dist/` with a reverse proxy to the same backend.
+
+More detail (architecture, shortcuts, in-app guides): **[`lab-web/README.md`](lab-web/README.md)**.
+
+## Canvas demo server (`celegans-demo-server`)
 
 From this directory:
 
@@ -69,11 +105,20 @@ http://127.0.0.1:8080/?ws=ws://127.0.0.1:8765
 
 ## How to deploy
 
+**Canvas demo**
+
 1. Deploy the `web/` folder to any static host (GitHub Pages, Netlify, Vercel, etc.). The project’s public static build is served at **[https://jimmy.arteriali.st](https://jimmy.arteriali.st)**.
 2. Set `DEFAULT_WS_URL` in `app.js` to your public **`wss://`** endpoint (Cloudflare Tunnel, ngrok, …) pointing at this server’s port, or rely on `?ws=` for ad-hoc backends.
 3. Keep `celegans-demo-server` + tunnel running while the “live worm” should be visible.
 
+**Virtual lab**
+
+1. Run `celegans-lab-server` (or containerise it) on a reachable host/port with CORS allowed for your frontend origin if different.
+2. Build `lab-web` (`npm run build`) and deploy `lab-web/dist/` behind the same host (path-based) or another static origin; configure the production base URL / proxy so browser calls to `/api` and `/ws` reach the lab server (Vite’s dev proxy is dev-only).
+
 ## Protocol (version 3, compact wire)
+
+This section documents **`celegans-demo-server`** and the static **`web/`** client. The **virtual lab** (`celegans-lab-server` + `lab-web/`) uses a **different** on-the-wire layout: **protocol `p` = 5** on `/ws/state` (segment triplets, COM xyz, expanded neural and body channels — see `lab/wire.py` and `lab-web/src/api/wire.ts`).
 
 Wire format uses short keys. **`p` must be `3`** on every frame; otherwise the server replies with `t: "e"` (`unsupported protocol version`). There is **no server-side trajectory**: the client appends each centre-of-mass sample to a local trail (max 2000 points).
 
