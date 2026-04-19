@@ -313,15 +313,46 @@ def build_rest_router(app_ctx: AppContext) -> APIRouter:
                         else:
                             raise KeyError(patch.field)
                     elif patch.target == "opt":
-                        if patch.field == "gravity":
-                            idx = patch.index if patch.index is not None else 2
-                            mj.opt.gravity[idx] = float(patch.value)
-                        elif patch.field == "viscosity":
-                            mj.opt.viscosity = float(patch.value)
-                        elif patch.field == "density":
-                            mj.opt.density = float(patch.value)
-                        elif patch.field == "timestep":
-                            mj.opt.timestep = float(patch.value)
+                        # Whitelist every writable mjOption field (mirrors
+                        # lab.parameters.mujoco_engine_params).
+                        _opt_float = {
+                            "timestep",
+                            "impratio",
+                            "tolerance",
+                            "noslip_tolerance",
+                            "ls_tolerance",
+                            "ccd_tolerance",
+                            "sleep_tolerance",
+                            "density",
+                            "viscosity",
+                            "o_margin",
+                        }
+                        _opt_int = {
+                            "integrator",
+                            "cone",
+                            "jacobian",
+                            "solver",
+                            "iterations",
+                            "noslip_iterations",
+                            "sdf_iterations",
+                            "ccd_iterations",
+                            "ls_iterations",
+                            "sdf_initpoints",
+                            "disableflags",
+                            "enableflags",
+                            "disableactuator",
+                            "enableactuator",
+                        }
+                        _opt_vec = ("gravity", "wind", "magnetic", "o_solref", "o_solimp", "o_friction")
+                        if patch.field in _opt_float:
+                            setattr(mj.opt, patch.field, float(patch.value))
+                        elif patch.field in _opt_int:
+                            setattr(mj.opt, patch.field, int(patch.value))
+                        elif patch.field in _opt_vec:
+                            assert patch.index is not None
+                            getattr(mj.opt, patch.field)[patch.index] = float(
+                                patch.value
+                            )
                         else:
                             raise KeyError(patch.field)
                     else:

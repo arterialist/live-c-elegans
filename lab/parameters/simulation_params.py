@@ -80,28 +80,7 @@ def register_simulation_specs(registry: ParameterRegistry) -> None:
     specs: list[ParameterSpec] = []
 
     # -- Timing -------------------------------------------------------------
-
-    def _get_timestep(ctx: Any) -> float:
-        return float(_engine(ctx).body.model.opt.timestep)
-
-    def _set_timestep(ctx: Any, value: Any) -> None:
-        _engine(ctx).body.model.opt.timestep = float(value)
-
-    specs.append(
-        ParameterSpec(
-            path="sim.physics_timestep",
-            label="MuJoCo timestep (s)",
-            group="Timing",
-            kind="float",
-            apply="live",
-            getter=_get_timestep,
-            setter=_set_timestep,
-            min=1e-4,
-            max=1e-2,
-            step=1e-4,
-            help="Integration step for the MuJoCo body (default 2 ms).",
-        )
-    )
+    # MuJoCo timestep lives under ``sim.mujoco.opt.timestep`` (MuJoCo engine tab).
 
     def _get_neural_ticks(ctx: Any) -> int:
         return int(_engine(ctx).neural_ticks_per_physics_step)

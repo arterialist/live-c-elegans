@@ -30,6 +30,7 @@ from loguru import logger
 from lab.parameters import ParameterRegistry
 from lab.parameters.body_params import register_body_specs
 from lab.parameters.connectome_params import register_connectome_specs
+from lab.parameters.mujoco_engine_params import register_mujoco_engine_specs
 from lab.parameters.simulation_params import register_simulation_specs
 from lab.rest_routes import AppContext, build_rest_router
 from lab.sim_runtime import LabSimRuntime
@@ -74,6 +75,7 @@ def build_app(
     )
     registry = ParameterRegistry()
     register_simulation_specs(registry)
+    register_mujoco_engine_specs(registry)
     register_body_specs(registry)
     register_connectome_specs(registry)
 
