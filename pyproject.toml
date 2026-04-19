@@ -11,13 +11,17 @@ requires-python = ">=3.11,<3.14"
 dependencies = [
     "active-inference",
     "websockets>=12",
+    "fastapi>=0.136",
+    "uvicorn[standard]>=0.44",
+    "pydantic>=2.13",
 ]
 
 [project.scripts]
 celegans-demo-server = "celegans_live_demo.server:main"
+celegans-lab-server = "lab.server:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["celegans_live_demo"]
+packages = ["celegans_live_demo", "lab"]
 
 [tool.uv.sources]
 active-inference = { path = "../active-inference", editable = true }
