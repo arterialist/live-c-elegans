@@ -114,7 +114,7 @@ export function NeuronInspector() {
   const sampleS = useCallback(() => {
     if (paulaIdx < 0) return null;
     const latest = useLabStore.getState().latest;
-    if (!latest?.running) return null;
+    if (!latest) return null;
     const S = latest.S;
     return S ? S[paulaIdx] : null;
   }, [paulaIdx]);
@@ -122,7 +122,7 @@ export function NeuronInspector() {
   const sampleFiredFlag = useCallback(() => {
     if (paulaIdx < 0) return null;
     const latest = useLabStore.getState().latest;
-    if (!latest?.running) return null;
+    if (!latest) return null;
     const f = latest.fired;
     if (!f) return null;
     return f[paulaIdx] ? 1 : 0;
@@ -131,7 +131,7 @@ export function NeuronInspector() {
   const sampleR = useCallback(() => {
     if (paulaIdx < 0) return null;
     const latest = useLabStore.getState().latest;
-    if (!latest?.running) return null;
+    if (!latest) return null;
     const R = latest.R;
     return R ? R[paulaIdx] : null;
   }, [paulaIdx]);
@@ -139,7 +139,7 @@ export function NeuronInspector() {
   const sampleB = useCallback(() => {
     if (paulaIdx < 0) return null;
     const latest = useLabStore.getState().latest;
-    if (!latest?.running) return null;
+    if (!latest) return null;
     const B = latest.B;
     return B ? B[paulaIdx] : null;
   }, [paulaIdx]);
@@ -147,7 +147,7 @@ export function NeuronInspector() {
   const sampleTref = useCallback(() => {
     if (paulaIdx < 0) return null;
     const latest = useLabStore.getState().latest;
-    if (!latest?.running) return null;
+    if (!latest) return null;
     const T = latest.Tref;
     return T ? T[paulaIdx] : null;
   }, [paulaIdx]);
@@ -155,7 +155,7 @@ export function NeuronInspector() {
   const sampleFire = useCallback(() => {
     if (paulaIdx < 0) return null;
     const latest = useLabStore.getState().latest;
-    if (!latest?.running) return null;
+    if (!latest) return null;
     const f = latest.fired;
     if (!f) return null;
     const alpha = 0.05;
@@ -327,7 +327,7 @@ export function NeuronInspector() {
               label="M0 stress"
               sample={() => {
                 const latest = useLabStore.getState().latest;
-                if (!latest?.running) return null;
+                if (!latest) return null;
                 return latest.neuromod[0] ?? null;
               }}
               color="oklch(0.8 0.17 30)"
@@ -339,7 +339,7 @@ export function NeuronInspector() {
               label="M1 reward"
               sample={() => {
                 const latest = useLabStore.getState().latest;
-                if (!latest?.running) return null;
+                if (!latest) return null;
                 return latest.neuromod[1] ?? null;
               }}
               color="oklch(0.8 0.17 140)"

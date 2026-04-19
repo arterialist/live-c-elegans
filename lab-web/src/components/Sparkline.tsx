@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useAppSettings } from "../state/app-settings";
+import { useLabStore } from "../state/store";
 
 /** Minimal canvas sparkline fed from a ring-buffer sampler.
  *
@@ -7,6 +8,10 @@ import { useAppSettings } from "../state/app-settings";
  * plotted against a fixed time-window (``history`` points wide). Keeping the
  * subscription inside this component means the parent tree does not re-render
  * every tick, even at 60 fps.
+ *
+ * When the lab sim is **paused** (``latest.running === false``), the ring
+ * buffer advances only when ``latest.tick`` changes (one point per **Step**
+ * / next-tick), not on every animation frame.
  */
 export function Sparkline({
   label,
@@ -39,6 +44,8 @@ export function Sparkline({
   const headRef = useRef(0);
   const lenRef = useRef(0);
   const lastRef = useRef<number | null>(null);
+  /** While paused, last sim tick we appended to the buffer (null = not latched yet). */
+  const pauseHeldTickRef = useRef<number | null>(null);
 
   // Resize value ring buffer when history length changes; keep marker buffer aligned.
   useEffect(() => {
@@ -61,7 +68,26 @@ export function Sparkline({
     if (!canvas) return;
     let raf = 0;
     const draw = () => {
-      const v = sample();
+      const latest = useLabStore.getState().latest;
+      const pauseGated = !!(latest && !latest.running);
+      const simTick = latest?.tick ?? null;
+
+      if (!pauseGated) {
+        pauseHeldTickRef.current = null;
+      }
+
+      let v: number | null = null;
+      if (!pauseGated) {
+        v = sample();
+      } else if (simTick != null) {
+        if (pauseHeldTickRef.current === null) {
+          pauseHeldTickRef.current = simTick;
+        } else if (pauseHeldTickRef.current !== simTick) {
+          pauseHeldTickRef.current = simTick;
+          v = sample();
+        }
+      }
+
       if (v != null && Number.isFinite(v)) {
         const buf = bufRef.current;
         const head = headRef.current;
