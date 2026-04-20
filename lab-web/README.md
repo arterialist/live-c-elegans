@@ -1,7 +1,7 @@
 # C. elegans Virtual Lab (web)
 
 A browser-based virtual lab for interactively dissecting a whole-organism
-**Artificial Life (ALife)** simulation of *Caenorhabditis elegans*: a
+**Artificial Life (ALife)** simulation of _Caenorhabditis elegans_: a
 302-neuron [PAULA](https://github.com/arterialist/neuron-model) spiking network
 wired by the Cook connectome, embodied in a 13-segment MuJoCo worm, and driven
 by the [active-inference / ALERM](https://github.com/arterialist/active-inference)
@@ -22,11 +22,47 @@ downstream effect on behaviour within one tick.
 
 ---
 
+## Screenshots
+
+Main lab layout (left settings pane, worm view, status HUD, transport bar).
+
+![Virtual lab — main layout](https://raw.githubusercontent.com/arterialist/live-c-elegans/main/images/home.png)
+
+Connectome tab — full 302-neuron body-aligned map with live firing halos.
+
+![Connectome — full map](https://raw.githubusercontent.com/arterialist/live-c-elegans/main/images/connectome_full.png)
+
+Connectome with a neuron selected in the map.
+
+![Connectome — selected neuron](https://raw.githubusercontent.com/arterialist/live-c-elegans/main/images/connectome_selected.png)
+
+Per-cell neuron inspector (PAULA state, parameters, terminals).
+
+![Connectome — neuron inspector](https://raw.githubusercontent.com/arterialist/live-c-elegans/main/images/connectome_neuron_inspector.png)
+
+Neuron inspector with additional detail visible.
+
+![Connectome — neuron inspector (expanded)](https://raw.githubusercontent.com/arterialist/live-c-elegans/main/images/connectome_neuron_inspector_more.png)
+
+Three.js orbit view of the embodied worm / scene.
+
+![3D worm scene](https://raw.githubusercontent.com/arterialist/live-c-elegans/main/images/connectome_3d_scene.png)
+
+Body tab — segments, joints, and muscle map.
+
+![Body — full layout](https://raw.githubusercontent.com/arterialist/live-c-elegans/main/images/body_full.png)
+
+Per-muscle inspector with activation and joint sparklines.
+
+![Body — muscle inspector](https://raw.githubusercontent.com/arterialist/live-c-elegans/main/images/muscle_inspector.png)
+
+---
+
 ## What this lab is, scientifically
 
-This is a whole-organism, *closed-loop* **ALife** sandbox for **active
+This is a whole-organism, _closed-loop_ **ALife** sandbox for **active
 inference in a biologically grounded spiking substrate**. In the Artificial
-Life lineage — Langton's soft/wet/hard trichotomy, Ray's *Tierra*, Sims'
+Life lineage — Langton's soft/wet/hard trichotomy, Ray's _Tierra_, Sims'
 evolved virtual creatures, Karl Sims / Reynolds / Grand / Bongard — the goal
 has always been to study life-like behaviour by **synthesising** it, not by
 reducing it. This lab continues that lineage in one specific direction:
@@ -112,39 +148,39 @@ celegans-lab-server (FastAPI + LabSimRuntime thread)
 
 ### Source layout
 
-| Path | Role |
-|------|------|
-| `src/api/http.ts` | Axios-only REST client. `fetch` is banned by `eslint.config.js` (`no-restricted-globals`) so every HTTP call flows through a single, typed surface. |
-| `src/api/wire.ts` | WebSocket frame decoders mirroring `lab/wire.py` (segment geometry, COM, neural summaries, joints/muscles, touch, neuromods, firing bits). |
-| `src/state/store.ts` | Main Zustand store + `decodeMessage` for hello / state frames (wire protocol **v5**). |
-| `src/state/ws.ts` | Reconnecting WebSocket hook with exponential backoff. |
-| `src/state/connectome.ts`, `state/body.ts`, `state/schema.ts` | Lazy-loaded REST snapshots + staged-patch buffers. |
-| `src/state/app-settings.ts` | Persisted UI preferences (sparkline history, FPS cap, overlay toggles, 2D/3D mode, connectome dot scale). |
-| `src/state/shortcuts.ts` | Global keyboard shortcuts (see below). |
-| `src/components/ControlsPane.tsx` | Left pane with the five top-level tabs. |
-| `src/components/RightPane.tsx` | Right pane with the worm view, status HUD, and transport HUD. |
-| `src/components/WormCanvas.tsx` | Fixed-on-worm 2D camera, scroll to zoom out up to 2× smaller. |
-| `src/components/WormCanvas3D.tsx` | Three.js orbit view of the 13-segment body with Z-exaggeration for sub-mm dorsal/ventral motion. |
-| `src/components/StatusHud.tsx` | Floating overlay with free-energy + M0 / M1 neuromodulator sparklines. |
-| `src/components/SimulationTransportHud.tsx` | Play / pause / step / reset + wall-clock pacing (ms per physics step, ms per neural tick). |
-| `src/components/NeuronMap.tsx`, `NeuronTable.tsx`, `NeuronInspector.tsx` | Connectome WYSIWYG / table / per-cell inspector. |
-| `src/components/BodyWYSIWYG.tsx`, `MuscleMap.tsx`, `MuscleInspector.tsx` | Body view + muscle tuning. |
-| `src/components/ui/GuideModal.tsx` | `?`-button + modal pair wired into every toggle and overlay setting so each switch ships a detailed, context-aware guide. |
-| `src/components/ui/KeyHint.tsx` | Tiny `<kbd>` pill shared by tab bar, transport HUD, App-settings panel, and guide footers. |
-| `src/components/tabs/ConnectomePaulaGuide.tsx` | In-app reference copy of the PAULA / ALERM parameter table, state variables, and tick phases. |
+| Path                                                                     | Role                                                                                                                                                |
+| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/api/http.ts`                                                        | Axios-only REST client. `fetch` is banned by `eslint.config.js` (`no-restricted-globals`) so every HTTP call flows through a single, typed surface. |
+| `src/api/wire.ts`                                                        | WebSocket frame decoders mirroring `lab/wire.py` (segment geometry, COM, neural summaries, joints/muscles, touch, neuromods, firing bits).          |
+| `src/state/store.ts`                                                     | Main Zustand store + `decodeMessage` for hello / state frames (wire protocol **v5**).                                                               |
+| `src/state/ws.ts`                                                        | Reconnecting WebSocket hook with exponential backoff.                                                                                               |
+| `src/state/connectome.ts`, `state/body.ts`, `state/schema.ts`            | Lazy-loaded REST snapshots + staged-patch buffers.                                                                                                  |
+| `src/state/app-settings.ts`                                              | Persisted UI preferences (sparkline history, FPS cap, overlay toggles, 2D/3D mode, connectome dot scale).                                           |
+| `src/state/shortcuts.ts`                                                 | Global keyboard shortcuts (see below).                                                                                                              |
+| `src/components/ControlsPane.tsx`                                        | Left pane with the five top-level tabs.                                                                                                             |
+| `src/components/RightPane.tsx`                                           | Right pane with the worm view, status HUD, and transport HUD.                                                                                       |
+| `src/components/WormCanvas.tsx`                                          | Fixed-on-worm 2D camera, scroll to zoom out up to 2× smaller.                                                                                       |
+| `src/components/WormCanvas3D.tsx`                                        | Three.js orbit view of the 13-segment body with Z-exaggeration for sub-mm dorsal/ventral motion.                                                    |
+| `src/components/StatusHud.tsx`                                           | Floating overlay with free-energy + M0 / M1 neuromodulator sparklines.                                                                              |
+| `src/components/SimulationTransportHud.tsx`                              | Play / pause / step / reset + wall-clock pacing (ms per physics step, ms per neural tick).                                                          |
+| `src/components/NeuronMap.tsx`, `NeuronTable.tsx`, `NeuronInspector.tsx` | Connectome WYSIWYG / table / per-cell inspector.                                                                                                    |
+| `src/components/BodyWYSIWYG.tsx`, `MuscleMap.tsx`, `MuscleInspector.tsx` | Body view + muscle tuning.                                                                                                                          |
+| `src/components/ui/GuideModal.tsx`                                       | `?`-button + modal pair wired into every toggle and overlay setting so each switch ships a detailed, context-aware guide.                           |
+| `src/components/ui/KeyHint.tsx`                                          | Tiny `<kbd>` pill shared by tab bar, transport HUD, App-settings panel, and guide footers.                                                          |
+| `src/components/tabs/ConnectomePaulaGuide.tsx`                           | In-app reference copy of the PAULA / ALERM parameter table, state variables, and tick phases.                                                       |
 
 ### Panes and tabs
 
 The left pane (resizable via [Allotment](https://github.com/johnwalley/allotment))
 holds five top-level tabs, selectable with keys `1`–`5`:
 
-| # | Tab | What it controls |
-|---|-----|------------------|
-| 1 | **Simulation settings** | Non-MuJoCo simulation parameters — neuromodulator coupling strengths, food / arena config, PAULA global knobs — grouped by category. Live parameters apply instantly; rebuild parameters queue until **Apply pending**. Every boolean exposes `apply` semantics (`live` / `rebuild`) and its dotted `sim.*` path so scripts can hit the same knob via `/api/schema`. |
-| 2 | **MuJoCo engine** | All `mjOption` fields: timestep, integrator, solver, fluid, gravity, global contact overrides, and engine flags. |
-| 3 | **Connectome** | WYSIWYG body-aligned 2D view of all 302 cells (colour-coded by class, live firing halos), sortable table, per-cell **Inspector** for PAULA state + parameters + pre/post synaptic terminals, and an in-app **Guide** with the full parameter / state / tick-phase reference. |
-| 4 | **Body** | MuJoCo body: segments, joints, 52 muscles (13 segments × DL/DR/VL/VR). WYSIWYG, per-segment Muscle Map, and live Inspector with sparklines for activation / joint angle / joint velocity. |
-| 5 | **App settings** | Frontend-only: WebSocket URL override, sparkline history length, render FPS cap, 2D/3D worm view, connectome dot scale, overlay toggles, **Panic reset**. Does not change simulation state except via an optional `resetSim()` call. |
+| #   | Tab                     | What it controls                                                                                                                                                                                                                                                                                                                                                     |
+| --- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | **Simulation settings** | Non-MuJoCo simulation parameters — neuromodulator coupling strengths, food / arena config, PAULA global knobs — grouped by category. Live parameters apply instantly; rebuild parameters queue until **Apply pending**. Every boolean exposes `apply` semantics (`live` / `rebuild`) and its dotted `sim.*` path so scripts can hit the same knob via `/api/schema`. |
+| 2   | **MuJoCo engine**       | All `mjOption` fields: timestep, integrator, solver, fluid, gravity, global contact overrides, and engine flags.                                                                                                                                                                                                                                                     |
+| 3   | **Connectome**          | WYSIWYG body-aligned 2D view of all 302 cells (colour-coded by class, live firing halos), sortable table, per-cell **Inspector** for PAULA state + parameters + pre/post synaptic terminals, and an in-app **Guide** with the full parameter / state / tick-phase reference.                                                                                         |
+| 4   | **Body**                | MuJoCo body: segments, joints, 52 muscles (13 segments × DL/DR/VL/VR). WYSIWYG, per-segment Muscle Map, and live Inspector with sparklines for activation / joint angle / joint velocity.                                                                                                                                                                            |
+| 5   | **App settings**        | Frontend-only: WebSocket URL override, sparkline history length, render FPS cap, 2D/3D worm view, connectome dot scale, overlay toggles, **Panic reset**. Does not change simulation state except via an optional `resetSim()` call.                                                                                                                                 |
 
 The right pane shows the worm itself (2D or 3D) with the status HUD (free
 energy + M0 stress + M1 reward sparklines) and the transport bar pinned to the
@@ -174,11 +210,11 @@ so the UI reflects simulator now rather than simulator-N-ticks-ago.
 
 ## Keyboard shortcuts
 
-| Key | Action |
-| --- | ------ |
-| `Space` | toggle play / pause |
-| `N` | step one tick |
-| `R` | reset simulation |
+| Key     | Action                                                                |
+| ------- | --------------------------------------------------------------------- |
+| `Space` | toggle play / pause                                                   |
+| `N`     | step one tick                                                         |
+| `R`     | reset simulation                                                      |
 | `1`–`5` | switch the active tab (Simulation / MuJoCo / Connectome / Body / App) |
 
 Shortcuts are suspended while the focused element is an input, textarea,
@@ -251,7 +287,7 @@ Modern ALife research oscillates between two poles: abstract agents in toy
 worlds (fast to iterate, weak claims about biology) and high-fidelity
 biophysics (strong claims, punishingly slow). The bottleneck is not the
 availability of connectomes — it is the distance between a connectome and
-an *embodied, behaving* simulation that a researcher can manipulate. By
+an _embodied, behaving_ simulation that a researcher can manipulate. By
 collapsing that distance into a single React UI over a 60 Hz closed loop,
 the lab tries to land **in between**: enough biology to justify the claims,
 enough interactivity to keep iteration cheap. It supports:
@@ -268,8 +304,8 @@ enough interactivity to keep iteration cheap. It supports:
   scale.** Most active-inference demos are grid-world toys; this one
   animates a MuJoCo nematode with its real wiring diagram.
 - **An ALife platform with a real animal's prior.** Classic Artificial
-  Life studies synthesise creatures from scratch (Sims, *Tierra*,
-  *Framsticks*) and derive behaviour from open-ended search. This lab
+  Life studies synthesise creatures from scratch (Sims, _Tierra_,
+  _Framsticks_) and derive behaviour from open-ended search. This lab
   instead starts from a fixed, empirically grounded substrate and asks
   what behaviour the local ALERM rule sustains on it — complementary to
   evolutionary ALife rather than a replacement.
@@ -278,7 +314,7 @@ enough interactivity to keep iteration cheap. It supports:
 
 - **PAULA is a model, not a simulacrum.** It is a spiking active-inference
   unit fit to capture the behaviours of interest, not a biophysical
-  reconstruction of a specific *C. elegans* cell type. Treat results as
+  reconstruction of a specific _C. elegans_ cell type. Treat results as
   predictions about the modelled dynamics.
 - **The connectome edits you make are live but not persisted.** Reset
   restores published defaults; checkpointing is available on the canvas
@@ -303,7 +339,7 @@ simulation. The primary references are the author’s own work:
   learning, and action that PAULA instantiates:
   [al.arteriali.st/blog/alerm-framework](https://al.arteriali.st/blog/alerm-framework).
 - **active-inference (runtime + simulations)** — the driver library that
-  builds the *C. elegans* simulation, loads PAULA, and exposes
+  builds the _C. elegans_ simulation, loads PAULA, and exposes
   `LabSimRuntime`: [github.com/arterialist/active-inference](https://github.com/arterialist/active-inference).
 - **celegans-live-demo (this repo)** — hosts both the canvas demo
   (`celegans-demo-server` + static `web/`) and the virtual lab

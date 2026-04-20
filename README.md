@@ -7,6 +7,10 @@ This package ships **two** ways to drive the same [active-inference](https://git
 
 **Public viewer (canvas build):** [https://jimmy.arteriali.st](https://jimmy.arteriali.st) (static `web/`). The browser uses the `ws` query parameter if set, otherwise `DEFAULT_WS_URL` in `web/app.js`—point that constant or `?ws=` at a reachable **`wss://`** server running `celegans-demo-server`.
 
+**Virtual lab — connectome:** full 302-neuron body-aligned map with live firing halos ([`lab-web/README.md`](lab-web/README.md)).
+
+![Connectome — full map](https://raw.githubusercontent.com/arterialist/live-c-elegans/main/images/connectome_full.png)
+
 ## Repository layout (local dev)
 
 This package depends on **`active-inference`** as an editable path dependency (`../active-inference` in `pyproject.toml`). That simulation, in turn, loads PAULA from a **sibling directory** named **`neuron-model`** (see `active-inference/simulations/paula_loader.py`, which prepends `…/neuron-model` to `sys.path`). For `uv sync` / imports to work the same way as a typical local checkout, clone repos **side by side** under a common parent, for example:
