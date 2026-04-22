@@ -143,7 +143,12 @@ export function MuscleMap() {
     if (col < 1 || col > segCount || row < 0 || row >= SIDES.length) return;
     const side = SIDES[row];
     const cell = cellIndexRef.current.find((c) => c.seg === col && c.side === side);
-    if (cell) select({ kind: "muscle", id: cell.id, name: cell.name });
+    if (!cell) return;
+    if (selection && selection.kind === "muscle" && selection.id === cell.id) {
+      select(null);
+      return;
+    }
+    select({ kind: "muscle", id: cell.id, name: cell.name });
   };
 
   if (!view) {

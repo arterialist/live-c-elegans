@@ -161,6 +161,10 @@ export function BodyWYSIWYG() {
     const side = (["DL", "DR", "VL", "VR"] as const)[sideRow];
     const aid = lookup[seg]?.[side];
     if (aid != null) {
+      if (selection && selection.kind === "muscle" && selection.id === aid) {
+        select(null);
+        return;
+      }
       const name = `muscle_seg${seg}_${side}`;
       select({ kind: "muscle", id: aid, name });
     }
