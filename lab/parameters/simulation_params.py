@@ -309,6 +309,126 @@ def register_simulation_specs(registry: ParameterRegistry) -> None:
         )
     )
 
+    # -- Plate boundary wall ----------------------------------------------
+    # The wall is a ring of static box geoms inserted into the MJCF at
+    # body load time (see CElegansBody._load_model_with_wall). All four
+    # geometry parameters are 'rebuild' because they reshape the model.
+
+    def _get_wall_height(_ctx: Any) -> float:
+        return float(aec.WALL_HEIGHT_M)
+
+    def _set_wall_height(_ctx: Any, value: Any) -> None:
+        aec.WALL_HEIGHT_M = float(value)
+
+    specs.append(
+        ParameterSpec(
+            path="sim.env.wall_height_m",
+            label="Plate wall height (m)",
+            group="Environment",
+            kind="float",
+            apply="rebuild",
+            getter=_get_wall_height,
+            setter=_set_wall_height,
+            min=0.0005,
+            max=0.02,
+            step=0.0001,
+            help="Vertical extent of the boundary wall (rebuild).",
+        )
+    )
+
+    def _get_wall_friction(_ctx: Any) -> float:
+        return float(aec.WALL_FRICTION_TANGENT)
+
+    def _set_wall_friction(_ctx: Any, value: Any) -> None:
+        aec.WALL_FRICTION_TANGENT = float(value)
+
+    specs.append(
+        ParameterSpec(
+            path="sim.env.wall_friction",
+            label="Plate wall friction (tangent)",
+            group="Environment",
+            kind="float",
+            apply="rebuild",
+            getter=_get_wall_friction,
+            setter=_set_wall_friction,
+            min=0.0,
+            max=2.0,
+            step=0.01,
+            help="Tangent-direction friction on the boundary wall (rebuild).",
+        )
+    )
+
+    def _get_wall_segments(_ctx: Any) -> int:
+        return int(aec.WALL_SEGMENTS_N)
+
+    def _set_wall_segments(_ctx: Any, value: Any) -> None:
+        aec.WALL_SEGMENTS_N = max(8, int(value))
+
+    specs.append(
+        ParameterSpec(
+            path="sim.env.wall_segments_n",
+            label="Plate wall segments",
+            group="Environment",
+            kind="int",
+            apply="rebuild",
+            getter=_get_wall_segments,
+            setter=_set_wall_segments,
+            min=8,
+            max=256,
+            step=1,
+            help="Number of boxes around the plate ring (rebuild).",
+        )
+    )
+
+    def _get_boundary_factor(_ctx: Any) -> float:
+        return float(aec.BOUNDARY_TELEPORT_FACTOR)
+
+    def _set_boundary_factor(_ctx: Any, value: Any) -> None:
+        aec.BOUNDARY_TELEPORT_FACTOR = float(value)
+
+    specs.append(
+        ParameterSpec(
+            path="sim.env.boundary_teleport_factor",
+            label="Teleport safety factor (× R)",
+            group="Environment",
+            kind="float",
+            apply="live",
+            getter=_get_boundary_factor,
+            setter=_set_boundary_factor,
+            min=1.0,
+            max=3.0,
+            step=0.05,
+            help=(
+                "Recentre the worm only when it leaves the disk by this "
+                "fraction of plate radius (1.2 = 20 % beyond). Numerical "
+                "safety net only; wall contact does the real obstruction."
+            ),
+        )
+    )
+
+    def _get_fake_wall_obs(_ctx: Any) -> bool:
+        return bool(aec.FAKE_WALL_OBSERVATION)
+
+    def _set_fake_wall_obs(_ctx: Any, value: Any) -> None:
+        aec.FAKE_WALL_OBSERVATION = bool(value)
+
+    specs.append(
+        ParameterSpec(
+            path="sim.env.fake_wall_obs",
+            label="Fake 'wall' observation channel",
+            group="Environment",
+            kind="bool",
+            apply="live",
+            getter=_get_fake_wall_obs,
+            setter=_set_fake_wall_obs,
+            help=(
+                "Legacy: synthesise a 'wall' contact-force entry from "
+                "radial distance. Off by default — real touch sensors "
+                "fire on physical wall contact instead."
+            ),
+        )
+    )
+
     # -- Sensorimotor scaling ----------------------------------------------
 
     def _get_joint_max(_ctx: Any) -> float:
@@ -354,6 +474,96 @@ def register_simulation_specs(registry: ParameterRegistry) -> None:
             max=1.0,
             step=0.01,
             help="Low-pass smoothing on motor outputs (0 = no smoothing).",
+        )
+    )
+
+    def _get_nmj_scale(ctx: Any) -> float:
+        return float(getattr(_ns(ctx), "_nmj_scale", 1.0 / 20.0))
+
+    def _set_nmj_scale(ctx: Any, value: Any) -> None:
+        setattr(_ns(ctx), "_nmj_scale", float(value))
+
+    def _get_nmj_threshold(ctx: Any) -> float:
+        return float(getattr(_ns(ctx), "_nmj_threshold", 0.0))
+
+    def _set_nmj_threshold(ctx: Any, value: Any) -> None:
+        setattr(_ns(ctx), "_nmj_threshold", float(value))
+
+    specs.append(
+        ParameterSpec(
+            path="sim.muscles.nmj_scale",
+            label="NMJ Strength Scale",
+            group="Sensorimotor",
+            kind="float",
+            apply="live",
+            getter=_get_nmj_scale,
+            setter=_set_nmj_scale,
+            min=0.0,
+            max=5.0,
+            step=0.01,
+            help="Multiplier for mapping neuron potentials to muscle forces.",
+        )
+    )
+
+    specs.append(
+        ParameterSpec(
+            path="sim.muscles.nmj_threshold",
+            label="NMJ Threshold",
+            group="Sensorimotor",
+            kind="float",
+            apply="live",
+            getter=_get_nmj_threshold,
+            setter=_set_nmj_threshold,
+            min=0.0,
+            max=1.0,
+            step=0.01,
+            help="Threshold before a neuron activates a muscle.",
+        )
+    )
+
+    # -- Thermodynamics ----------------------------------------------------
+
+    def _get_gap_diffusion(ctx: Any) -> float:
+        return float(getattr(_ns(ctx), "_gap_diffusion_rate", 0.0002))
+
+    def _set_gap_diffusion(ctx: Any, value: Any) -> None:
+        setattr(_ns(ctx), "_gap_diffusion_rate", float(value))
+
+    specs.append(
+        ParameterSpec(
+            path="sim.thermo.gap_diffusion_rate",
+            label="Gap Junction Diffusion k",
+            group="Thermodynamics",
+            kind="float",
+            apply="live",
+            getter=_get_gap_diffusion,
+            setter=_set_gap_diffusion,
+            min=0.0,
+            max=0.05,
+            step=0.0001,
+            help="Continuous analog potential diffusion across gap junctions.",
+        )
+    )
+
+    def _get_tonic_heat(ctx: Any) -> float:
+        return float(getattr(_ns(ctx), "_tonic_metabolic_heat", 0.05))
+
+    def _set_tonic_heat(ctx: Any, value: Any) -> None:
+        setattr(_ns(ctx), "_tonic_metabolic_heat", float(value))
+
+    specs.append(
+        ParameterSpec(
+            path="sim.thermo.tonic_metabolic_heat",
+            label="Pacemaker Tonic Heat",
+            group="Thermodynamics",
+            kind="float",
+            apply="live",
+            getter=_get_tonic_heat,
+            setter=_set_tonic_heat,
+            min=0.0,
+            max=0.5,
+            step=0.001,
+            help="Basal analog leak driving the oscillator limit cycle.",
         )
     )
 
