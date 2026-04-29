@@ -300,7 +300,9 @@ def _b64_fired_bits(fired: list[int]) -> str:
 def _snapshot_dict_to_wire(snap: dict[str, Any]) -> dict[str, Any]:
     """Quantize floats, then replace dense arrays with compact v3 wire fields."""
     q = _quantize_snapshot_for_wire(snap)
-    out: dict[str, Any] = {k: v for k, v in q.items() if k not in ("s", "f", "c", "S", "F", "R")}
+    out: dict[str, Any] = {
+        k: v for k, v in q.items() if k not in ("s", "f", "c", "S", "F", "R")
+    }
     if "s" in q:
         sm: list[int] = []
         for row in q["s"]:
@@ -552,17 +554,29 @@ class SimRuntime:
             events: list[dict[str, Any]] = []
             if self._food_evt_accum_fr:
                 events.append(
-                    {"p": PROTOCOL_VERSION, "t": "fr", "n": int(self._food_evt_accum_fr)}
+                    {
+                        "p": PROTOCOL_VERSION,
+                        "t": "fr",
+                        "n": int(self._food_evt_accum_fr),
+                    }
                 )
                 self._food_evt_accum_fr = 0
             if self._food_evt_accum_fe:
                 events.append(
-                    {"p": PROTOCOL_VERSION, "t": "fe", "n": int(self._food_evt_accum_fe)}
+                    {
+                        "p": PROTOCOL_VERSION,
+                        "t": "fe",
+                        "n": int(self._food_evt_accum_fe),
+                    }
                 )
                 self._food_evt_accum_fe = 0
             if self._food_evt_accum_fa:
                 events.append(
-                    {"p": PROTOCOL_VERSION, "t": "fa", "n": int(self._food_evt_accum_fa)}
+                    {
+                        "p": PROTOCOL_VERSION,
+                        "t": "fa",
+                        "n": int(self._food_evt_accum_fa),
+                    }
                 )
                 self._food_evt_accum_fa = 0
             return snap, events
