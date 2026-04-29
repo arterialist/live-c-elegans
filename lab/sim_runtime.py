@@ -87,6 +87,8 @@ class LabSimRuntime:
             food_positions=[],
             log_level="WARNING",
             record_neural_states=False,
+            enable_m0=False,
+            enable_m1=False,
             suppress_connectome_summary=True,
             max_history=32,
             body_settle_steps=body_settle_steps,
