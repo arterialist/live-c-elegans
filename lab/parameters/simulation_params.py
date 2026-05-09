@@ -230,6 +230,32 @@ def register_simulation_specs(registry: ParameterRegistry) -> None:
             2.0,
             0.01,
         ),
+        (
+            "CMD_NOISE_SIGMA",
+            "CMD_NOISE_SIGMA",
+            "Stochastic OU noise σ on AVA/AVB/AVD/AVE command interneurons. Drives "
+            "spontaneous run/reversal switching (Roberts 2016, Gordus 2015).",
+            0.0,
+            0.5,
+            0.005,
+        ),
+        (
+            "CMD_NOISE_TAU",
+            "CMD_NOISE_TAU",
+            "Correlation time (ticks) of command-interneuron noise. ~50 ticks ≈ 100ms.",
+            1.0,
+            5000.0,
+            10.0,
+        ),
+        (
+            "REV_LATCH_TRIGGER_S",
+            "REV_LATCH_TRIGGER_S",
+            "AVA mean-S threshold to trigger a reversal latch. Higher = harder "
+            "to trigger; 1e9 disables. Bio-realistic ~0.5.",
+            0.0,
+            1.0,
+            0.01,
+        ),
     ]
     for path_suffix, attr, help_text, lo, hi, step in NEUROMOD_SPECS:
         specs.append(
@@ -243,6 +269,76 @@ def register_simulation_specs(registry: ParameterRegistry) -> None:
                 min=lo,
                 max=hi,
                 step=step,
+                help=help_text,
+            )
+        )
+
+    # Head CPG injection target.
+    def _get_cpg_at_rmd(ctx: Any) -> bool:
+        return bool(getattr(_ns(ctx), "_HEAD_CPG_AT_RMD", True))
+
+    def _set_cpg_at_rmd(ctx: Any, v: Any) -> None:
+        setattr(_ns(ctx), "_HEAD_CPG_AT_RMD", bool(v))
+
+    specs.append(
+        ParameterSpec(
+            path="sim.neuromod.HEAD_CPG_AT_RMD",
+            label="Head CPG → RMD/SMD (biological pacemakers)",
+            group="Neuromodulation",
+            kind="bool",
+            apply="live",
+            getter=_get_cpg_at_rmd,
+            setter=_set_cpg_at_rmd,
+            help="True (bio): inject CPG sin into RMD/SMD ring motor neurons "
+                 "(Mulcahy 2018). False (legacy): inject directly into DB1/VB1.",
+        )
+    )
+
+    # Intrinsic RMD/SMD oscillation.
+    def _get_intr_enabled(ctx: Any) -> bool:
+        return bool(getattr(_ns(ctx), "_INTRINSIC_OSC_ENABLED", False))
+
+    def _set_intr_enabled(ctx: Any, v: Any) -> None:
+        setattr(_ns(ctx), "_INTRINSIC_OSC_ENABLED", bool(v))
+
+    specs.append(
+        ParameterSpec(
+            path="sim.neuromod.INTRINSIC_OSC_ENABLED",
+            label="RMD/SMD intrinsic oscillation",
+            group="Neuromodulation",
+            kind="bool",
+            apply="live",
+            getter=_get_intr_enabled,
+            setter=_set_intr_enabled,
+            help="External voltage-gated phase oscillator on RMD/SMD pacemakers "
+                 "(replaces external CPG sin with autonomous oscillation; bio fidelity).",
+        )
+    )
+
+    INTR_OSC_SPECS: list[tuple[str, str, str, float, float, float]] = [
+        ("INTRINSIC_OSC_FREQ_HZ", "INTRINSIC_OSC_FREQ_HZ",
+         "RMD/SMD intrinsic oscillator frequency (Hz).", 0.0, 5.0, 0.05),
+        ("INTRINSIC_OSC_AMP", "INTRINSIC_OSC_AMP",
+         "RMD/SMD intrinsic oscillator amplitude.", 0.0, 1.0, 0.01),
+        ("INTRINSIC_OSC_GATE_S", "INTRINSIC_OSC_GATE_S",
+         "Voltage threshold above which the intrinsic oscillator is active.", -1.0, 1.0, 0.01),
+        ("INTRINSIC_OSC_BASELINE_D", "INTRINSIC_OSC_BASELINE_D",
+         "Dorsal RMD/SMD/SMB tonic depolarization (NALCN-like Na+ leak). "
+         "Compensates for ventral-side connectome dominance.", 0.0, 0.5, 0.005),
+        ("INTRINSIC_OSC_BASELINE_V", "INTRINSIC_OSC_BASELINE_V",
+         "Ventral RMD/SMD/SMB tonic depolarization (NALCN-like Na+ leak).",
+         0.0, 0.5, 0.005),
+    ]
+    for path_suffix, attr, help_text, lo, hi, step in INTR_OSC_SPECS:
+        specs.append(
+            _make_ns_attr_spec(
+                path=f"sim.neuromod.{path_suffix}",
+                attr=f"_{attr}",
+                label=attr,
+                group="Neuromodulation",
+                kind="float",
+                apply="live",
+                min=lo, max=hi, step=step,
                 help=help_text,
             )
         )
@@ -449,7 +545,29 @@ def register_simulation_specs(registry: ParameterRegistry) -> None:
             min=0.1,
             max=2.0,
             step=0.01,
-            help="Hinge travel in the MuJoCo model (requires rebuild).",
+            help="Hinge travel for yaw (lateral) joints. Pitch range is bound separately.",
+        )
+    )
+
+    def _get_pitch_max(_ctx: Any) -> float:
+        return float(getattr(aec, "PITCH_ANGLE_MAX_RAD", 0.02))
+
+    def _set_pitch_max(_ctx: Any, value: Any) -> None:
+        aec.PITCH_ANGLE_MAX_RAD = float(value)
+
+    specs.append(
+        ParameterSpec(
+            path="sim.joints.pitch_max",
+            label="Pitch angle max (rad)",
+            group="Sensorimotor",
+            kind="float",
+            apply="rebuild",
+            getter=_get_pitch_max,
+            setter=_set_pitch_max,
+            min=0.0,
+            max=0.5,
+            step=0.005,
+            help="Vertical-plane joint range. Tight (~0.02 rad) keeps body planar.",
         )
     )
 
@@ -478,7 +596,7 @@ def register_simulation_specs(registry: ParameterRegistry) -> None:
     )
 
     def _get_nmj_scale(ctx: Any) -> float:
-        return float(getattr(_ns(ctx), "_nmj_scale", 1.0 / 20.0))
+        return float(getattr(_ns(ctx), "_nmj_scale", 1.0))
 
     def _set_nmj_scale(ctx: Any, value: Any) -> None:
         setattr(_ns(ctx), "_nmj_scale", float(value))
@@ -518,6 +636,121 @@ def register_simulation_specs(registry: ParameterRegistry) -> None:
             max=1.0,
             step=0.01,
             help="Threshold before a neuron activates a muscle.",
+        )
+    )
+
+    # Head ring (RMD/SMD/SMB) muscle drive weight.
+    def _get_head_ring_weight(ctx: Any) -> float:
+        return float(getattr(_ns(ctx), "_HEAD_RING_WEIGHT", 0.5))
+
+    def _set_head_ring_weight(ctx: Any, value: Any) -> None:
+        setattr(_ns(ctx), "_HEAD_RING_WEIGHT", float(value))
+
+    specs.append(
+        ParameterSpec(
+            path="sim.muscles.head_ring_weight",
+            label="Head ring (RMD/SMD/SMB) muscle drive weight",
+            group="Sensorimotor",
+            kind="float",
+            apply="live",
+            getter=_get_head_ring_weight,
+            setter=_set_head_ring_weight,
+            min=0.0,
+            max=2.0,
+            step=0.05,
+            help="RMD/SMD/SMB direct innervation strength on anterior muscles. "
+                 "Higher → stronger head bend; too high causes proprio runaway.",
+        )
+    )
+
+    # D-type GABA inhibition strength (reciprocal cross-inhibition).
+    def _get_inhib_weight(ctx: Any) -> float:
+        return float(getattr(_ns(ctx), "_INHIB_WEIGHT", 0.8))
+
+    def _set_inhib_weight(ctx: Any, value: Any) -> None:
+        setattr(_ns(ctx), "_INHIB_WEIGHT", float(value))
+
+    specs.append(
+        ParameterSpec(
+            path="sim.muscles.inhib_weight",
+            label="D-type GABA inhibition strength",
+            group="Sensorimotor",
+            kind="float",
+            apply="live",
+            getter=_get_inhib_weight,
+            setter=_set_inhib_weight,
+            min=0.0,
+            max=2.0,
+            step=0.01,
+            help="DD/VD GABA-ergic contribution to muscle drive vs B/A excitation. "
+                 "Real C. elegans GABA ≈ 0.7-1.0× ACh strength.",
+        )
+    )
+
+    # Body-wall reciprocal inhibition (mechanical antagonism between dorsal/ventral).
+    def _get_recip_inhib(ctx: Any) -> float:
+        return float(getattr(_ns(ctx), "_RECIP_INHIB", 0.5))
+
+    def _set_recip_inhib(ctx: Any, value: Any) -> None:
+        setattr(_ns(ctx), "_RECIP_INHIB", float(value))
+
+    specs.append(
+        ParameterSpec(
+            path="sim.muscles.recip_inhib",
+            label="Reciprocal antagonism (D vs V muscle)",
+            group="Sensorimotor",
+            kind="float",
+            apply="live",
+            getter=_get_recip_inhib,
+            setter=_set_recip_inhib,
+            min=0.0,
+            max=1.0,
+            step=0.01,
+            help="Mechanical antagonism between dorsal and ventral muscle drives.",
+        )
+    )
+
+    # Toggle: disable synaptic plasticity globally (eta_post=eta_retro=0).
+    def _get_plast_dis(ctx: Any) -> bool:
+        return bool(getattr(_ns(ctx), "_plasticity_disabled", True))
+
+    def _set_plast_dis(ctx: Any, v: Any) -> None:
+        setattr(_ns(ctx), "_plasticity_disabled", bool(v))
+
+    specs.append(
+        ParameterSpec(
+            path="sim.muscles.plasticity_disabled",
+            label="Disable synaptic plasticity (eta=0)",
+            group="Sensorimotor",
+            kind="bool",
+            apply="rebuild",
+            getter=_get_plast_dis,
+            setter=_set_plast_dis,
+            help="Real C. elegans plasticity is hour/day timescale; PAULA's "
+                 "default eta=0.01 drifts weights on second timescales and "
+                 "saturates critical pathways. Disable for stable locomotion.",
+        )
+    )
+
+    # Toggle: body-wall motor neurons graded-only (suppress spikes).
+    def _get_graded(ctx: Any) -> bool:
+        return bool(getattr(_ns(ctx), "_graded_motor_only", True))
+
+    def _set_graded(ctx: Any, v: Any) -> None:
+        setattr(_ns(ctx), "_graded_motor_only", bool(v))
+
+    specs.append(
+        ParameterSpec(
+            path="sim.muscles.graded_motor_only",
+            label="Graded-only body-wall motors (no spikes)",
+            group="Sensorimotor",
+            kind="bool",
+            apply="rebuild",
+            getter=_get_graded,
+            setter=_set_graded,
+            help="Real C. elegans body-wall neurons (DB/VB/DA/VA/AS/DD/VD) "
+                 "signal via graded membrane potentials, not spikes "
+                 "(Liu 2009; Goodman 2012). Suppresses firing on rebuild.",
         )
     )
 
