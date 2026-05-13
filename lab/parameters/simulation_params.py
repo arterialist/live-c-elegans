@@ -343,6 +343,51 @@ def register_simulation_specs(registry: ParameterRegistry) -> None:
             )
         )
 
+    # A-MN intrinsic UNC-2 oscillator (Gao 2018). Latched-only — fires only
+    # while the existing reversal latch is in "active" state, so it adds no
+    # forward-state interference.
+    def _get_amn_enabled(ctx: Any) -> bool:
+        return bool(getattr(_ns(ctx), "_A_MN_OSC_ENABLED", False))
+
+    def _set_amn_enabled(ctx: Any, v: Any) -> None:
+        setattr(_ns(ctx), "_A_MN_OSC_ENABLED", bool(v))
+
+    specs.append(
+        ParameterSpec(
+            path="sim.neuromod.A_MN_OSC_ENABLED",
+            label="A-MN UNC-2 oscillator (Gao 2018, latched)",
+            group="Neuromodulation",
+            kind="bool",
+            apply="live",
+            getter=_get_amn_enabled,
+            setter=_set_amn_enabled,
+            help="DA/VA intrinsic Ca²⁺ pacemaker. Active only during reversal "
+                 "latch — drives backward locomotion wave (tail→head).",
+        )
+    )
+
+    A_MN_OSC_SPECS: list[tuple[str, str, str, float, float, float]] = [
+        ("A_MN_OSC_FREQ_HZ", "A_MN_OSC_FREQ_HZ",
+         "A-MN intrinsic oscillator frequency (Hz).", 0.0, 3.0, 0.05),
+        ("A_MN_OSC_AMP", "A_MN_OSC_AMP",
+         "A-MN per-tick depolarisation amplitude.", 0.0, 0.2, 0.005),
+        ("A_MN_OSC_SPATIAL_FREQ", "A_MN_OSC_SPATIAL_FREQ",
+         "Wavelengths along body for the backward wave.", 0.5, 3.0, 0.1),
+    ]
+    for path_suffix, attr, help_text, lo, hi, step in A_MN_OSC_SPECS:
+        specs.append(
+            _make_ns_attr_spec(
+                path=f"sim.neuromod.{path_suffix}",
+                attr=f"_{attr}",
+                label=attr,
+                group="Neuromodulation",
+                kind="float",
+                apply="live",
+                min=lo, max=hi, step=step,
+                help=help_text,
+            )
+        )
+
     # Toggles for neuromodulator channels (live).
     def _get_m0(ctx: Any) -> bool:
         return bool(_ns(ctx)._enable_m0)  # noqa: SLF001
