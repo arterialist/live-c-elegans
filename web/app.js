@@ -371,86 +371,33 @@
   const neuralTooltipEl = document.getElementById("neural-tooltip");
   const neuronModalEl = document.getElementById("neuron-modal");
 
-  const MS_PER_DAY = 86400000;
-  /** ~30 days: switch to date-first formatting (calendar scale). */
-  const MS_PER_APPROX_MONTH = 30 * MS_PER_DAY;
+  const MS_PER_SECOND = 1000;
+  const MS_PER_MINUTE = 60 * MS_PER_SECOND;
+  const MS_PER_HOUR = 60 * MS_PER_MINUTE;
+  const MS_PER_DAY = 24 * MS_PER_HOUR;
 
   /**
-   * tick × dt as ms since Unix epoch; formatted in a fixed offset (UTC) so all viewers see the same clock.
-   * Under 1 day: time-of-day only. One day to ~30 days: date + time + ms.
-   * From ~30 days: long calendar date + medium time (no fractional seconds).
+   * tick × dt as elapsed model time since tick 0. This is a duration, not a wall-clock date.
    */
   function formatSimulationTime(tickNum) {
-    const ms = tickNum * SIM_SECONDS_PER_TICK * 1000;
+    let ms = Math.round(tickNum * SIM_SECONDS_PER_TICK * MS_PER_SECOND);
     if (!Number.isFinite(ms) || ms < 0) return "—";
-    const d = new Date(ms);
-    const tz = { timeZone: "UTC" };
-    const h23 = { hourCycle: "h23" };
 
-    if (ms < MS_PER_DAY) {
-      try {
-        return (
-          new Intl.DateTimeFormat(undefined, {
-            ...tz,
-            ...h23,
-            hour: "2-digit",
-            minute: "2-digit",
-            second: "2-digit",
-            fractionalSecondDigits: 3,
-          }).format(d)
-        );
-      } catch (_) {
-        const hh = String(d.getUTCHours()).padStart(2, "0");
-        const mm = String(d.getUTCMinutes()).padStart(2, "0");
-        const ss = String(d.getUTCSeconds()).padStart(2, "0");
-        const fff = String(d.getUTCMilliseconds()).padStart(3, "0");
-        return `${hh}:${mm}:${ss}.${fff}`;
-      }
-    }
+    const days = Math.floor(ms / MS_PER_DAY);
+    ms -= days * MS_PER_DAY;
+    const hours = Math.floor(ms / MS_PER_HOUR);
+    ms -= hours * MS_PER_HOUR;
+    const minutes = Math.floor(ms / MS_PER_MINUTE);
+    ms -= minutes * MS_PER_MINUTE;
+    const seconds = Math.floor(ms / MS_PER_SECOND);
+    const millis = ms - seconds * MS_PER_SECOND;
 
-    if (ms < MS_PER_APPROX_MONTH) {
-      const opts = {
-        ...tz,
-        ...h23,
-        weekday: "short",
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-      };
-      try {
-        return (
-          new Intl.DateTimeFormat(undefined, {
-            ...opts,
-            fractionalSecondDigits: 3,
-          }).format(d)
-        );
-      } catch (_) {
-        const base = new Intl.DateTimeFormat(undefined, opts).format(d);
-        const frac = String(d.getUTCMilliseconds()).padStart(3, "0");
-        return `${base}.${frac}`;
-      }
-    }
-
-    try {
-      return (
-        new Intl.DateTimeFormat(undefined, {
-          ...tz,
-          dateStyle: "long",
-          timeStyle: "medium",
-        }).format(d)
-      );
-    } catch (_) {
-      const y = d.getUTCFullYear();
-      const mo = d.getUTCMonth() + 1;
-      const da = d.getUTCDate();
-      const hh = String(d.getUTCHours()).padStart(2, "0");
-      const mm = String(d.getUTCMinutes()).padStart(2, "0");
-      const ss = String(d.getUTCSeconds()).padStart(2, "0");
-      return `${y}-${String(mo).padStart(2, "0")}-${String(da).padStart(2, "0")} ${hh}:${mm}:${ss}`;
-    }
+    const hh = String(hours).padStart(2, "0");
+    const mm = String(minutes).padStart(2, "0");
+    const ss = String(seconds).padStart(2, "0");
+    const fff = String(millis).padStart(3, "0");
+    const clock = `${hh}:${mm}:${ss}.${fff}`;
+    return days > 0 ? `${days}d ${clock}` : clock;
   }
 
   function setHudTickSimFromK(k) {
@@ -464,11 +411,10 @@
     }
     tickHudEl.textContent = String(Math.trunc(tickNum));
     simTimeHudEl.textContent = formatSimulationTime(tickNum);
-    const ms = tickNum * SIM_SECONDS_PER_TICK * 1000;
     simTimeHudEl.title =
-      "Model time = tick × " +
+      "Elapsed model time since tick 0 = tick × " +
       SIM_SECONDS_PER_TICK +
-      " s from simulation epoch";
+      " s";
   }
 
   function reparentControlsHintToBar() {
