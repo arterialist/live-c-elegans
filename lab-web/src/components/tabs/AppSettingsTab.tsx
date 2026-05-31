@@ -64,6 +64,12 @@ export function AppSettingsTab() {
             value={settings.wormViewMode}
             onChange={(v) => settings.set("wormViewMode", v)}
           />
+          <ToggleRow
+            label="Lock camera on subject"
+            value={settings.lockCameraOnSubject}
+            onChange={(v) => settings.set("lockCameraOnSubject", v)}
+            guide={GUIDES.lockCameraOnSubject}
+          />
           <NumberRow
             label="Sparkline history"
             hint="Samples retained by each live chart. Bigger = smoother but slower."
@@ -368,6 +374,16 @@ const GUIDES: Record<string, GuideContent> = {
       },
     ],
   },
+  lockCameraOnSubject: {
+    summary:
+      "Keeps the right-pane body camera centered on the worm while enabled. Turn it off to use the canvas as a free camera.",
+    sections: [
+      {
+        heading: "Free camera",
+        body: "When unlocked, drag to pan and scroll or pinch to zoom in 2D. In 3D, orbit, pan, and zoom controls keep their current view instead of recentering on the worm.",
+      },
+    ],
+  },
   renderFpsCap: {
     summary:
       "Soft ceiling on how often heavy canvases (the worm 2D/3D view, connectome map, body WYSIWYG, sparklines) redraw themselves.",
@@ -409,11 +425,11 @@ const GUIDES: Record<string, GuideContent> = {
   },
   showGrid: {
     summary:
-      "Draws a 1 mm reference grid on the worm canvas, anchored to the center of mass.",
+      "Draws a 1 mm reference grid on the worm canvas.",
     sections: [
       {
         heading: "Why it matters",
-        body: "The grid gives you an absolute scale (every line = 1 mm) while the camera stays locked on the worm. Without it, zooming can make the worm look the same size even when the body length or plate radius changes.",
+        body: "The grid gives you an absolute scale (every line = 1 mm). With camera lock on it follows the worm; with free camera it remains anchored to the current viewport.",
       },
     ],
   },
@@ -454,7 +470,7 @@ const GUIDES: Record<string, GuideContent> = {
   },
   showTrail: {
     summary:
-      "Paints a faint polyline of the last ~600 center-of-mass positions so you can see the worm's path even with the camera locked.",
+      "Paints a faint polyline of the last ~600 center-of-mass positions so you can see the worm's path.",
     sections: [
       {
         heading: "When to use it",
@@ -468,7 +484,7 @@ const GUIDES: Record<string, GuideContent> = {
     sections: [
       {
         heading: "1. Local UI settings are cleared",
-        body: "Sparkline history, FPS cap, worm 2D/3D mode, connectome neuron size, overlay toggles, and the WebSocket override reset to their defaults. Nothing on the backend is touched by this step.",
+        body: "Sparkline history, FPS cap, worm 2D/3D mode, camera lock, connectome neuron size, overlay toggles, and the WebSocket override reset to their defaults. Nothing on the backend is touched by this step.",
       },
       {
         heading: "2. Simulation reset is requested",

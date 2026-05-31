@@ -14,6 +14,8 @@ export interface AppSettings {
   wormViewMode: WormViewMode;
   /** WYSIWYG connectome map: multiplier on neuron dot radii (1 = default, 2 = max). */
   connectomeNeuronScale: number;
+  /** Right-pane body camera follows the organism COM when enabled. */
+  lockCameraOnSubject: boolean;
   /** Overlay toggles on the worm canvas. */
   showGrid: boolean;
   showHudText: boolean;
@@ -32,6 +34,7 @@ const DEFAULTS: AppSettings = {
   renderFpsCap: 60,
   wormViewMode: "2d",
   connectomeNeuronScale: 1,
+  lockCameraOnSubject: true,
   showGrid: true,
   showHudText: true,
   showHudPanel: true,

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type PointerEvent, type WheelEvent } from "react";
 import { useLabStore } from "../state/store";
 import { useAppSettings } from "../state/app-settings";
 
@@ -10,11 +10,30 @@ const ZOOM_MAX = 1.0;
 
 export function WormCanvas() {
   const latest = useLabStore((s) => s.latest);
+  const lockCameraOnSubject = useAppSettings((s) => s.lockCameraOnSubject);
   const showGrid = useAppSettings((s) => s.showGrid);
   const showHudText = useAppSettings((s) => s.showHudText);
   const showTrail = useAppSettings((s) => s.showTrail);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const trailRef = useRef<Array<[number, number]>>([]);
+  const cameraCenterRef = useRef<[number, number] | null>(null);
+  const lastLockRef = useRef(lockCameraOnSubject);
+  const panRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    startCx: number;
+    startCy: number;
+  } | null>(null);
+  const touchRef = useRef(new Map<number, { x: number; y: number }>());
+  const pinchRef = useRef<{
+    startDistance: number;
+    startScreenX: number;
+    startScreenY: number;
+    startCx: number;
+    startCy: number;
+    startZoom: number;
+  } | null>(null);
   const [zoom, setZoom] = useState(ZOOM_MAX);
 
   useEffect(() => {
@@ -50,14 +69,22 @@ export function WormCanvas() {
       const pxPerMm = (minDim / BODY_LENGTH_MM) * zoom;
       const [cx, cy] = latest.com_mm;
       const cz = latest.com_mm[2];
+      if (!lockCameraOnSubject && lastLockRef.current) {
+        cameraCenterRef.current = [cx, cy];
+      }
+      if (lockCameraOnSubject || !cameraCenterRef.current) {
+        cameraCenterRef.current = [cx, cy];
+      }
+      lastLockRef.current = lockCameraOnSubject;
+      const [viewCx, viewCy] = cameraCenterRef.current;
 
-      if (showGrid) drawMmGrid(ctx, w, h, pxPerMm, cx, cy);
+      if (showGrid) drawMmGrid(ctx, w, h, pxPerMm, viewCx, viewCy);
 
       // Worm body as a polyline with segment circles
       const seg = latest.segments_mm;
       const toPx = (mmx: number, mmy: number): [number, number] => [
-        w / 2 + (mmx - cx) * pxPerMm,
-        h / 2 - (mmy - cy) * pxPerMm, // invert y
+        w / 2 + (mmx - viewCx) * pxPerMm,
+        h / 2 - (mmy - viewCy) * pxPerMm, // invert y
       ];
 
       if (showTrail) {
@@ -128,21 +155,200 @@ export function WormCanvas() {
       raf = requestAnimationFrame(loop);
     });
     return () => cancelAnimationFrame(raf);
-  }, [latest, zoom, showGrid, showHudText, showTrail]);
+  }, [latest, zoom, lockCameraOnSubject, showGrid, showHudText, showTrail]);
 
-  const onWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
+  const onWheel = (e: WheelEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
     const delta = -e.deltaY * 0.001;
-    setZoom((z) => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z + delta)));
+    zoomAt(e.clientX, e.clientY, clamp(zoom + delta, ZOOM_MIN, ZOOM_MAX));
+  };
+
+  const onPointerDown = (e: PointerEvent<HTMLCanvasElement>) => {
+    if (lockCameraOnSubject) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    canvas.setPointerCapture(e.pointerId);
+    if (e.pointerType === "touch") {
+      touchRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (touchRef.current.size >= 2) startPinch();
+      else startPan(e.pointerId, e.clientX, e.clientY);
+      e.preventDefault();
+      return;
+    }
+    if (e.button === 0 || e.button === 1 || e.button === 2) {
+      startPan(e.pointerId, e.clientX, e.clientY);
+      e.preventDefault();
+    }
+  };
+
+  const onPointerMove = (e: PointerEvent<HTMLCanvasElement>) => {
+    if (lockCameraOnSubject) return;
+    if (e.pointerType === "touch") {
+      touchRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (touchRef.current.size >= 2) {
+        updatePinch();
+      } else if (panRef.current?.pointerId === e.pointerId) {
+        updatePan(e.clientX, e.clientY);
+      }
+      e.preventDefault();
+      return;
+    }
+    if (panRef.current?.pointerId === e.pointerId) {
+      updatePan(e.clientX, e.clientY);
+      e.preventDefault();
+    }
+  };
+
+  const onPointerUp = (e: PointerEvent<HTMLCanvasElement>) => {
+    if (e.pointerType === "touch") {
+      touchRef.current.delete(e.pointerId);
+      if (touchRef.current.size >= 2) {
+        startPinch();
+      } else {
+        pinchRef.current = null;
+        const remaining = touchRef.current.entries().next().value as
+          | [number, { x: number; y: number }]
+          | undefined;
+        if (remaining) startPan(remaining[0], remaining[1].x, remaining[1].y);
+        else panRef.current = null;
+      }
+    }
+    if (panRef.current?.pointerId === e.pointerId) panRef.current = null;
+    try {
+      canvasRef.current?.releasePointerCapture(e.pointerId);
+    } catch {
+      // Pointer capture may already be gone after a cancelled touch.
+    }
+  };
+
+  const startPan = (pointerId: number, clientX: number, clientY: number) => {
+    const [cx, cy] = currentCameraCenter();
+    panRef.current = {
+      pointerId,
+      startX: clientX,
+      startY: clientY,
+      startCx: cx,
+      startCy: cy,
+    };
+  };
+
+  const updatePan = (clientX: number, clientY: number) => {
+    const pan = panRef.current;
+    if (!pan) return;
+    const metrics = canvasMetrics();
+    if (!metrics) return;
+    const pxPerMm = (Math.min(metrics.w, metrics.h) / BODY_LENGTH_MM) * zoom;
+    cameraCenterRef.current = [
+      pan.startCx - (clientX - pan.startX) / pxPerMm,
+      pan.startCy + (clientY - pan.startY) / pxPerMm,
+    ];
+  };
+
+  const startPinch = () => {
+    const pinch = pinchMetrics();
+    if (!pinch) return;
+    const [cx, cy] = currentCameraCenter();
+    pinchRef.current = {
+      ...pinch,
+      startCx: cx,
+      startCy: cy,
+      startZoom: zoom,
+    };
+  };
+
+  const updatePinch = () => {
+    const start = pinchRef.current;
+    const pinch = pinchMetrics();
+    const metrics = canvasMetrics();
+    if (!start || !pinch || !metrics) return;
+    const nextZoom = clamp(
+      start.startZoom * (pinch.startDistance / start.startDistance),
+      ZOOM_MIN,
+      ZOOM_MAX,
+    );
+    const startPxPerMm = (Math.min(metrics.w, metrics.h) / BODY_LENGTH_MM) * start.startZoom;
+    const nextPxPerMm = (Math.min(metrics.w, metrics.h) / BODY_LENGTH_MM) * nextZoom;
+    const worldX = start.startCx + (start.startScreenX - metrics.w / 2) / startPxPerMm;
+    const worldY = start.startCy - (start.startScreenY - metrics.h / 2) / startPxPerMm;
+    cameraCenterRef.current = [
+      worldX - (pinch.startScreenX - metrics.w / 2) / nextPxPerMm,
+      worldY + (pinch.startScreenY - metrics.h / 2) / nextPxPerMm,
+    ];
+    setZoom(nextZoom);
+  };
+
+  const zoomAt = (clientX: number, clientY: number, nextZoom: number) => {
+    if (!Number.isFinite(nextZoom)) return;
+    if (!lockCameraOnSubject) {
+      const metrics = canvasMetrics();
+      if (metrics) {
+        const [cx, cy] = currentCameraCenter();
+        const sx = clientX - metrics.left;
+        const sy = clientY - metrics.top;
+        const oldPxPerMm = (Math.min(metrics.w, metrics.h) / BODY_LENGTH_MM) * zoom;
+        const nextPxPerMm = (Math.min(metrics.w, metrics.h) / BODY_LENGTH_MM) * nextZoom;
+        const worldX = cx + (sx - metrics.w / 2) / oldPxPerMm;
+        const worldY = cy - (sy - metrics.h / 2) / oldPxPerMm;
+        cameraCenterRef.current = [
+          worldX - (sx - metrics.w / 2) / nextPxPerMm,
+          worldY + (sy - metrics.h / 2) / nextPxPerMm,
+        ];
+      }
+    }
+    setZoom(nextZoom);
+  };
+
+  const currentCameraCenter = (): [number, number] => {
+    if (cameraCenterRef.current) return cameraCenterRef.current;
+    if (latest) return [latest.com_mm[0], latest.com_mm[1]];
+    return [0, 0];
+  };
+
+  const canvasMetrics = () => {
+    const canvas = canvasRef.current;
+    const parent = canvas?.parentElement;
+    if (!canvas || !parent) return null;
+    const rect = canvas.getBoundingClientRect();
+    return {
+      left: rect.left,
+      top: rect.top,
+      w: parent.clientWidth,
+      h: parent.clientHeight,
+    };
+  };
+
+  const pinchMetrics = () => {
+    const touches = [...touchRef.current.values()];
+    if (touches.length < 2) return null;
+    const a = touches[0];
+    const b = touches[1];
+    return {
+      startDistance: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)),
+      startScreenX: (a.x + b.x) * 0.5,
+      startScreenY: (a.y + b.y) * 0.5,
+    };
   };
 
   return (
     <canvas
       ref={canvasRef}
       onWheel={onWheel}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+      onContextMenu={(e) => {
+        if (!lockCameraOnSubject) e.preventDefault();
+      }}
       className="absolute inset-0 h-full w-full cursor-grab"
+      style={{ touchAction: lockCameraOnSubject ? "auto" : "none" }}
       aria-label="Worm camera"
     />
   );
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
 }
 
 function drawStatus(

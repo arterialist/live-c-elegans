@@ -63,12 +63,11 @@ export function WormCanvas3D() {
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.06;
-    controls.screenSpacePanning = false;
+    controls.screenSpacePanning = true;
     controls.minDistance = 0.35;
     controls.maxDistance = 48;
-    /** Keep the camera above the substrate plane (no upside-down worm shots). */
-    controls.maxPolarAngle = Math.PI / 2 - 0.06;
-    controls.minPolarAngle = 0.12;
+    controls.maxPolarAngle = Math.PI;
+    controls.minPolarAngle = 0;
     controls.rotateSpeed = 0.65;
     controls.zoomSpeed = 0.85;
     controls.panSpeed = 0.75;
@@ -170,6 +169,8 @@ export function WormCanvas3D() {
 
     let raf = 0;
     let lastGeomMs = 0;
+    let anchorMm: [number, number, number] | null = null;
+    let lastLock = useAppSettings.getState().lockCameraOnSubject;
 
     const resize = () => {
       const w = canvasHost.clientWidth;
@@ -194,12 +195,23 @@ export function WormCanvas3D() {
         lastGeomMs = timeMs;
         const latest = useLabStore.getState().latest;
         if (latest && latest.segments_mm.length >= 9) {
+          const lockCameraOnSubject = useAppSettings.getState().lockCameraOnSubject;
           const [cx, cy, cz] = latest.com_mm;
+          if (!lockCameraOnSubject && lastLock) {
+            anchorMm = [cx, cy, cz];
+          }
+          if (lockCameraOnSubject || !anchorMm) {
+            anchorMm = [cx, cy, cz];
+          }
+          lastLock = lockCameraOnSubject;
+          if (lockCameraOnSubject) {
+            controls.target.set(0, 0.02, 0);
+          }
           const seg = latest.segments_mm;
           const n = Math.min(Math.floor(seg.length / 3), MAX_SEGMENTS);
           for (let i = 0; i < n; i++) {
             const o = i * 3;
-            simMmToWorld(seg[o], seg[o + 1], seg[o + 2], cx, cy, cz, tmp);
+            simMmToWorld(seg[o], seg[o + 1], seg[o + 2], anchorMm[0], anchorMm[1], anchorMm[2], tmp);
             positions[o] = tmp.x;
             positions[o + 1] = tmp.y;
             positions[o + 2] = tmp.z;
