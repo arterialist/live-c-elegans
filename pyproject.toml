@@ -16,12 +16,19 @@ dependencies = [
     "pydantic>=2.13",
 ]
 
+[project.optional-dependencies]
+analysis = [
+    "numpy>=1.26",
+    "scipy>=1.13",
+    "matplotlib>=3.9",
+]
+
 [project.scripts]
 celegans-demo-server = "celegans_live_demo.server:main"
 celegans-lab-server = "lab.server:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["celegans_live_demo", "lab"]
+packages = ["celegans_live_demo", "lab", "analysis"]
 
 [tool.uv.sources]
 active-inference = { path = "../active-inference", editable = true }

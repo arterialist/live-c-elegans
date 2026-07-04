@@ -183,14 +183,25 @@ dependencies = [
     { name = "websockets" },
 ]
 
+[package.optional-dependencies]
+analysis = [
+    { name = "matplotlib" },
+    { name = "numpy" },
+    { name = "scipy" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "active-inference", editable = "../active-inference" },
     { name = "fastapi", specifier = ">=0.136" },
+    { name = "matplotlib", marker = "extra == 'analysis'", specifier = ">=3.9" },
+    { name = "numpy", marker = "extra == 'analysis'", specifier = ">=1.26" },
     { name = "pydantic", specifier = ">=2.13" },
+    { name = "scipy", marker = "extra == 'analysis'", specifier = ">=1.13" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.44" },
     { name = "websockets", specifier = ">=12" },
 ]
+provides-extras = ["analysis"]
 
 [[package]]
 name = "certifi"

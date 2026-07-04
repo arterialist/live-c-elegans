@@ -71,6 +71,10 @@ from celegans_live_demo.worm_snapshot import (
 #   cm = centre of mass [cx_nm, cy_nm] ints (same scale as sm)
 #   Si, Ri = membrane S and threshold R: int = round(float * 1e4) (client ÷ 1e4)
 #   Fb = ceil(n/8) base64, bit i = neuron i fired (1) or not (0)
+# Analysis-only opt-in (--analysis-wire; off by default for the public demo):
+#   Hello L_body = {joints, muscles}
+#   ja, jv, ma = joint angles, joint velocities, muscle activations; int = round(float * 1e4)
+#   nm01 = [M0, M1], fe = prediction_error proxy, me = motor_entropy proxy
 PROTOCOL_VERSION = 3
 BROADCAST_HZ = 60.0
 # Client display does not need float64 text; cap at 10 significant digits (~vs 16).
@@ -279,6 +283,15 @@ def _scaled_int_wire(values: list[float], *, scale: float = 1e4) -> list[int]:
     return [int(round(float(x) * scale)) for x in values]
 
 
+def _last_trace_value(seq: Any) -> float:
+    try:
+        if seq:
+            return float(seq[-1])
+    except (IndexError, TypeError):
+        pass
+    return float("nan")
+
+
 def _mm_to_nm_int(mm: float) -> int:
     """1 nm resolution from mm (matches 6 sigfig wire for segment coords)."""
     return int(round(float(mm) * 1e6))
@@ -338,7 +351,9 @@ class SimRuntime:
         evol_config: dict[str, Any] | None = None,
         snapshot_path: Path | None = None,
         snapshot_interval_s: float = 60.0,
+        analysis_wire: bool = False,
     ) -> None:
+        self._analysis_wire = bool(analysis_wire)
         self.engine, self.loop = build_c_elegans_simulation(
             food_positions=[],
             log_level="WARNING",
@@ -369,12 +384,22 @@ class SimRuntime:
         self._running.set()
         self._neural_static: dict[str, Any] | None = None
         self._neuron_meta: list[dict[str, Any]] | None = None
+        self._body_static: dict[str, Any] | None = None
+        self._analysis_muscle_names: list[str] = []
         ns0 = self.engine.nervous_system
         if isinstance(ns0, CElegansNervousSystem):
             names = ns0.get_neuron_names_paula_order()
             ax, ay = side_view_layout_normalized(names)
             self._neural_static = {"nm": names, "ax": ax, "ay": ay}
             self._neuron_meta = _wire_neuron_meta_list(ns0)
+            muscles = ns0.export_live_checkpoint().get("muscles", {})
+            self._analysis_muscle_names = sorted(str(k) for k in muscles.keys())
+        body0 = self.engine.body
+        if self._analysis_wire and isinstance(body0, CElegansBody):
+            self._body_static = {
+                "joints": list(body0.joint_names),
+                "muscles": list(self._analysis_muscle_names),
+            }
         # Counts reset each sim tick in run_loop before draining the command queue.
         self._food_cmd_add = 0
         self._food_cmd_remove = 0
@@ -490,6 +515,31 @@ class SimRuntime:
             out["S"] = [round(float(x), 4) for x in s_raw]
             out["F"] = [int(x) for x in f_raw]
             out["R"] = [round(float(x), 4) for x in r_raw]
+            if self._analysis_wire:
+                m0, m1 = ns.neuromod_levels
+                out["nm01"] = [round(float(m0), 6), round(float(m1), 6)]
+        if self._analysis_wire:
+            joint_names: list[str] = []
+            if self._body_static is not None:
+                joint_names = list(self._body_static.get("joints", []))
+            out["ja"] = _scaled_int_wire(
+                [step.body_state.joint_angles.get(name, 0.0) for name in joint_names]
+            )
+            out["jv"] = _scaled_int_wire(
+                [
+                    step.body_state.joint_velocities.get(name, 0.0)
+                    for name in joint_names
+                ]
+            )
+            out["ma"] = _scaled_int_wire(
+                [
+                    step.motor_outputs.get(name, 0.0)
+                    for name in self._analysis_muscle_names
+                ]
+            )
+            trace = self.loop.free_energy_trace
+            out["fe"] = round(_last_trace_value(trace.prediction_error), 8)
+            out["me"] = round(_last_trace_value(trace.motor_entropy), 8)
         return out
 
     def _food_evt_triplet_this_tick(self) -> tuple[int, int, int]:
@@ -648,6 +698,11 @@ def main() -> None:
         choices=("TRACE", "DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR"),
         help="Console log level (loguru)",
     )
+    parser.add_argument(
+        "--analysis-wire",
+        action="store_true",
+        help="Expose extra parity-analysis fields on the WebSocket wire (off for public demo)",
+    )
     args = parser.parse_args()
 
     _configure_console_logging(args.log_level)
@@ -656,7 +711,7 @@ def main() -> None:
     snap_path = Path(args.snapshot_path).expanduser() if args.snapshot_path else None
 
     logger.info(
-        "Server config: host={} port={} broadcast_hz={} max_clients={} evol_config={} snapshot_path={} snapshot_interval_s={} body_settle_steps={}",
+        "Server config: host={} port={} broadcast_hz={} max_clients={} evol_config={} snapshot_path={} snapshot_interval_s={} body_settle_steps={} analysis_wire={}",
         args.host,
         args.port,
         BROADCAST_HZ,
@@ -665,6 +720,7 @@ def main() -> None:
         str(snap_path) if snap_path else "(none)",
         args.snapshot_interval_sec,
         args.body_settle_steps,
+        args.analysis_wire,
     )
     logger.info("Building simulation (first run may download connectome) …")
     rt = SimRuntime(
@@ -672,6 +728,7 @@ def main() -> None:
         evol_config=evol,
         snapshot_path=snap_path,
         snapshot_interval_s=args.snapshot_interval_sec,
+        analysis_wire=args.analysis_wire,
     )
     # neuron-model reconfigures loguru during PAULA build; restore our stderr sink.
     _configure_console_logging(args.log_level)
@@ -764,6 +821,8 @@ def main() -> None:
                 hello["L"] = rt._neural_static
             if rt._neuron_meta is not None:
                 hello["M"] = rt._neuron_meta
+            if rt._body_static is not None:
+                hello["L_body"] = rt._body_static
             await ws.send(json.dumps(hello, separators=(",", ":")))
             await broadcast_online_count()
             async for raw in ws:
