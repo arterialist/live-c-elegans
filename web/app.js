@@ -173,7 +173,7 @@
     ctx2d.restore();
   }
 
-  const DEFAULT_WS_URL = "wss://e053-118-101-170-104.ngrok-free.app";
+  const DEFAULT_WS_URL = "wss://cad7-118-101-170-104.ngrok-free.app/ws/state";
   /** Upper cap for zoom (screen pixels per world mm); worm is sub-mm so allow deep zoom */
   const MAX_SCALE_PX_PER_MM = 800;
   const PROTOCOL = 3;
