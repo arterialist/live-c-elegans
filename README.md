@@ -179,5 +179,10 @@ The bundled `web/app.js` can still interpret **legacy v2-style** keys on a state
 
 ## Limits
 
+The offline payload comparison in `scripts/benchmark_ws_payload.py` uses the
+server's current encoding helpers. Run `uv run python scripts/benchmark_ws_payload.py`
+for a synthetic frame, or append a captured legacy state JSON path. It reports
+JSON and zlib sizes, not simulation performance or biological validation.
+
 - Global rate limit on food commands (see `server.py`).
 - Max concurrent WebSocket clients (see `server.py`).

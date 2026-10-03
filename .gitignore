@@ -52,7 +52,8 @@ Thumbs.db
 
 worm.json
 
-scripts/
+scripts/*
+!scripts/benchmark_ws_payload.py
 
 node_modules
 dist
