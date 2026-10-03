@@ -1,6 +1,6 @@
 """Entrypoint: ``celegans-lab-server``.
 
-Starts a FastAPI app on ``localhost:8765`` with:
+Starts a FastAPI app on ``localhost:8811`` with:
     GET  /api/health
     GET  /api/schema
     POST /api/patch
@@ -16,9 +16,9 @@ Starts a FastAPI app on ``localhost:8765`` with:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import sys
 import threading
-import time
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
@@ -87,23 +87,25 @@ def build_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         sim_thread.start()
-        # Wait for the first frame so clients connecting immediately get data.
-        for _ in range(600):
-            if runtime.has_frame():
-                break
-            time.sleep(0.05)
-        if not runtime.has_frame():
-            logger.warning("Sim did not produce a frame in time (continuing)")
-        else:
-            logger.info(
-                "Lab sim ready (first tick={})",
-                runtime.transport_snapshot()["tick"],
-            )
         try:
+            # Wait for the first frame without blocking other asyncio tasks.
+            for _ in range(600):
+                if runtime.has_frame() or not sim_thread.is_alive():
+                    break
+                await asyncio.sleep(0.05)
+            if not runtime.has_frame():
+                logger.warning("Sim did not produce a frame in time (continuing)")
+            else:
+                logger.info(
+                    "Lab sim ready (first tick={})",
+                    runtime.transport_snapshot()["tick"],
+                )
             yield
         finally:
             runtime.stop()
-            sim_thread.join(timeout=30.0)
+            await asyncio.to_thread(sim_thread.join, timeout=30.0)
+            if sim_thread.is_alive():
+                logger.warning("Lab simulation thread still running after 30s")
 
     app = FastAPI(title="C. elegans Virtual Lab", lifespan=lifespan)
     app.add_middleware(

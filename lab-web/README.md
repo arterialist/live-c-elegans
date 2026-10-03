@@ -110,7 +110,7 @@ zero physical turnaround.
 ### Dev
 
 ```bash
-# Terminal A — lab backend on :8765 (or :8811 if you changed the default)
+# Terminal A — lab backend on :8811
 cd ../celegans-live-demo
 uv run celegans-lab-server
 

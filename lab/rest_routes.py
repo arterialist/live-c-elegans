@@ -26,8 +26,8 @@ class PacingBody(BaseModel):
     ``0`` means no added delay for that axis (run as fast as the CPU allows).
     """
 
-    real_ms_per_physics_step: float | None = None
-    real_ms_per_neural_tick: float | None = None
+    real_ms_per_physics_step: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    real_ms_per_neural_tick: float | None = Field(default=None, ge=0, allow_inf_nan=False)
 
 
 class Patch(BaseModel):
@@ -62,9 +62,9 @@ class NeuronParamPatch(BaseModel):
 
     field: str
     value: Any
-    index: int | None = None
+    index: int | None = Field(default=None, ge=0)
     subfield: str | None = None
-    vec_index: int | None = None
+    vec_index: int | None = Field(default=None, ge=0)
 
 
 class NeuronPatchBody(BaseModel):
@@ -83,8 +83,8 @@ class BodyPatch(BaseModel):
     target: Literal["joint", "actuator", "body", "pair", "opt"]
     field: str
     value: Any
-    id: int | None = None
-    index: int | None = None
+    id: int | None = Field(default=None, ge=0)
+    index: int | None = Field(default=None, ge=0)
 
 
 class BodyPatchBody(BaseModel):
@@ -112,6 +112,14 @@ _NEURON_RUNTIME_FIELDS: dict[str, type] = {
     "F_avg": float,
     "t_last_fire": float,
 }
+
+
+def _require_finite_value(value: Any) -> None:
+    """Reject NaN/infinity before any live model state is changed."""
+    import numpy as np
+
+    if not np.all(np.isfinite(np.asarray(value, dtype=float))):
+        raise ValueError("value must contain only finite numbers")
 
 
 class AppContext:
@@ -284,6 +292,7 @@ def build_rest_router(app_ctx: AppContext) -> APIRouter:
             params = neuron.params
             for patch in body.patches:
                 try:
+                    _require_finite_value(patch.value)
                     if patch.field in _NEURON_RUNTIME_FIELDS:
                         caster = _NEURON_RUNTIME_FIELDS[patch.field]
                         setattr(neuron, patch.field, caster(patch.value))
@@ -439,8 +448,10 @@ def build_rest_router(app_ctx: AppContext) -> APIRouter:
         with app_ctx.runtime.sim_lock:
             for patch in body.patches:
                 try:
+                    _require_finite_value(patch.value)
+                    if patch.target != "opt" and patch.id is None:
+                        raise ValueError(f"{patch.target} patch requires id")
                     if patch.target == "joint":
-                        assert patch.id is not None
                         dof = int(mj.jnt_dofadr[patch.id])
                         if patch.field == "damping":
                             mj.dof_damping[dof] = float(patch.value)
@@ -449,7 +460,6 @@ def build_rest_router(app_ctx: AppContext) -> APIRouter:
                         else:
                             raise KeyError(patch.field)
                     elif patch.target == "actuator":
-                        assert patch.id is not None
                         if patch.field == "forcerange":
                             idx = patch.index if patch.index is not None else 1
                             mj.actuator_forcerange[patch.id, idx] = float(patch.value)
@@ -459,24 +469,22 @@ def build_rest_router(app_ctx: AppContext) -> APIRouter:
                         else:
                             raise KeyError(patch.field)
                     elif patch.target == "body":
-                        assert patch.id is not None
                         if patch.field == "mass":
                             mj.body_mass[patch.id] = float(patch.value)
                         elif patch.field == "inertia":
-                            assert patch.index is not None
+                            if patch.index is None:
+                                raise ValueError("inertia patch requires index")
                             mj.body_inertia[patch.id, patch.index] = float(patch.value)
                         else:
                             raise KeyError(patch.field)
                     elif patch.target == "pair":
-                        assert patch.id is not None
+                        if patch.index is None:
+                            raise ValueError(f"{patch.field} patch requires index")
                         if patch.field == "friction":
-                            assert patch.index is not None
                             mj.pair_friction[patch.id, patch.index] = float(patch.value)
                         elif patch.field == "solref":
-                            assert patch.index is not None
                             mj.pair_solref[patch.id, patch.index] = float(patch.value)
                         elif patch.field == "solimp":
-                            assert patch.index is not None
                             mj.pair_solimp[patch.id, patch.index] = float(patch.value)
                         else:
                             raise KeyError(patch.field)
@@ -517,7 +525,8 @@ def build_rest_router(app_ctx: AppContext) -> APIRouter:
                         elif patch.field in _opt_int:
                             setattr(mj.opt, patch.field, int(patch.value))
                         elif patch.field in _opt_vec:
-                            assert patch.index is not None
+                            if patch.index is None:
+                                raise ValueError(f"{patch.field} patch requires index")
                             getattr(mj.opt, patch.field)[patch.index] = float(
                                 patch.value
                             )
@@ -546,7 +555,7 @@ def build_rest_router(app_ctx: AppContext) -> APIRouter:
                     )
 
             # Body mass changes invalidate composite rigid-body inertias; cheap to recompute.
-            if any(p.target == "body" and p.field == "mass" for p in body.patches):
+            if any(p["target"] == "body" and p["field"] == "mass" for p in applied):
                 mujoco.mj_setTotalmass(mj, float(mj.body_mass.sum()))
 
         return {"applied": applied, "failed": failed}

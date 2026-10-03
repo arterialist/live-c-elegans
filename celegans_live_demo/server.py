@@ -292,6 +292,20 @@ def _last_trace_value(seq: Any) -> float:
     return float("nan")
 
 
+def _parse_client_message(raw: str | bytes) -> dict[str, Any]:
+    message = json.loads(raw)
+    if not isinstance(message, dict):
+        raise ValueError("expected a JSON object")
+    return message
+
+
+def _food_command_coordinates(message: dict[str, Any]) -> tuple[float, float]:
+    x_mm, y_mm = float(message["x"]), float(message["y"])
+    if not (math.isfinite(x_mm) and math.isfinite(y_mm)):
+        raise ValueError("expected finite x,y")
+    return x_mm, y_mm
+
+
 def _mm_to_nm_int(mm: float) -> int:
     """1 nm resolution from mm (matches 6 sigfig wire for segment coords)."""
     return int(round(float(mm) * 1e6))
@@ -827,12 +841,12 @@ def main() -> None:
             await broadcast_online_count()
             async for raw in ws:
                 try:
-                    msg = json.loads(raw)
-                except json.JSONDecodeError:
+                    msg = _parse_client_message(raw)
+                except ValueError:
                     logger.warning("Invalid JSON from {} ({} bytes)", client, len(raw))
                     await ws.send(
                         json.dumps(
-                            {"p": PROTOCOL_VERSION, "t": "e", "m": "invalid JSON"}
+                            {"p": PROTOCOL_VERSION, "t": "e", "m": "expected JSON object"}
                         )
                     )
                     continue
@@ -888,8 +902,7 @@ def main() -> None:
                         )
                         continue
                     try:
-                        x_mm = float(msg["x"])
-                        y_mm = float(msg["y"])
+                        x_mm, y_mm = _food_command_coordinates(msg)
                         rt.command_queue().put(
                             {
                                 "type": cmd_name,
@@ -898,7 +911,7 @@ def main() -> None:
                                 "client": client,
                             }
                         )
-                    except (KeyError, TypeError, ValueError):
+                    except (KeyError, TypeError, ValueError, OverflowError):
                         logger.warning(
                             "Malformed food command from {} (expected x,y): {!r}",
                             client,
@@ -906,7 +919,7 @@ def main() -> None:
                         )
                         await ws.send(
                             json.dumps(
-                                {"p": PROTOCOL_VERSION, "t": "e", "m": "expected x,y"}
+                                {"p": PROTOCOL_VERSION, "t": "e", "m": "expected finite x,y"}
                             )
                         )
                     continue

@@ -13,6 +13,7 @@ Owned by a single background thread. Differs from the demo ``SimRuntime``:
 
 from __future__ import annotations
 
+import math
 import queue
 import threading
 import time
@@ -143,6 +144,9 @@ class LabSimRuntime:
         real_ms_per_physics_step: float | None = None,
         real_ms_per_neural_tick: float | None = None,
     ) -> dict[str, float]:
+        for value in (real_ms_per_physics_step, real_ms_per_neural_tick):
+            if value is not None and (not math.isfinite(value) or value < 0.0):
+                raise ValueError("pacing must be a finite nonnegative number")
         with self._sim_lock:
             if real_ms_per_physics_step is not None:
                 self._real_ms_per_physics_step = max(0.0, float(real_ms_per_physics_step))
@@ -213,21 +217,23 @@ class LabSimRuntime:
             while self._running_flag.is_set():
                 should_step = False
                 with self._sim_lock:
+                    # Live edits also take effect while paused, without a tick.
+                    self._drain_patches()
                     if self._transport.step_pending > 0:
                         self._transport.step_pending -= 1
                         should_step = True
                     elif self._transport.running:
                         should_step = True
 
+                    if should_step:
+                        frame = self._build_frame()
+                        self._transport.tick = frame.tick
+
                 if not should_step:
                     time.sleep(1.0 / 120.0)
                     self._refresh_latest_paused()
                     continue
 
-                with self._sim_lock:
-                    self._drain_patches()
-                    frame = self._build_frame()
-                    self._transport.tick = frame.tick
                 with self._latest_lock:
                     self._latest = frame
         except Exception:

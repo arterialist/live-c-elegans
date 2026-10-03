@@ -42,9 +42,9 @@ If your PAULA checkout lives under another folder name, symlink or rename it to 
 The lab runs a **background simulation thread** (same `LabSimRuntime` / connectome as the canvas demo, without food commands) and serves:
 
 - **REST** under `/api/` — health, connectome, per-neuron detail + patch, body/MuJoCo introspection, parameter schema + live/rebuild patches, simulation transport (play / pause / step), pacing, etc. (see `lab/server.py` docstring and `lab/rest_routes.py`).
-- **WebSocket** `GET /ws/state` — lab wire protocol (v5 compact frames: segment geometry, COM, neural summaries, joints, muscles, neuromods; see `lab/wire.py` and `lab-web/src/api/wire.ts`).
+- **WebSocket** `GET /ws/state` — lab wire protocol (v6 compact frames: segment geometry, COM, neural summaries, joints, muscles, neuromods; see `lab/wire.py` and `lab-web/src/api/wire.ts`).
 
-**Run locally** (default API + WS on **8765**; Vite proxies to it in dev):
+**Run locally** (default API + WS on **8811**; Vite proxies to it in dev):
 
 ```bash
 # from celegans-live-demo/
@@ -122,7 +122,7 @@ http://127.0.0.1:8080/?ws=ws://127.0.0.1:8765
 
 ## Protocol (version 3, compact wire)
 
-This section documents **`celegans-demo-server`** and the static **`web/`** client. The **virtual lab** (`celegans-lab-server` + `lab-web/`) uses a **different** on-the-wire layout: **protocol `p` = 5** on `/ws/state` (segment triplets, COM xyz, expanded neural and body channels — see `lab/wire.py` and `lab-web/src/api/wire.ts`).
+This section documents **`celegans-demo-server`** and the static **`web/`** client. The **virtual lab** (`celegans-lab-server` + `lab-web/`) uses a **different** on-the-wire layout: **protocol `p` = 6** on `/ws/state` (segment triplets, COM xyz, expanded neural and body channels — see `lab/wire.py` and `lab-web/src/api/wire.ts`).
 
 Wire format uses short keys. **`p` must be `3`** on every frame; otherwise the server replies with `t: "e"` (`unsupported protocol version`). There is **no server-side trajectory**: the client appends each centre-of-mass sample to a local trail (max 2000 points).
 
